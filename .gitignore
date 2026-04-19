@@ -1,0 +1,40 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test and tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Jupyter and editor state
+.ipynb_checkpoints/
+.DS_Store
+.vscode/
+.idea/
+
+# Local runtime outputs
+data/profiles.json
+data/superblock_schedule.json
+data/example_graph.json
+data/example_execution_trace.json
+data/example_superblock_schedule.json
+
+# Logs
+*.log

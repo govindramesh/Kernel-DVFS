@@ -1,0 +1,5 @@
+numpy>=1.24
+nvidia-ml-py>=12.0.0
+torch>=2.2.0
+triton>=2.2.0
+kernel_tuner>=1.0.0

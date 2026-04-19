@@ -1,0 +1,40 @@
+{
+  "metadata": {
+    "model": "synthetic-transformer-layer",
+    "description": "Single forward-pass replay trace for a transformer block"
+  },
+  "trace": [
+    {
+      "kernel_name": "fused_qkv_matmul",
+      "duration_ms": 1.8
+    },
+    {
+      "kernel_name": "rmsnorm",
+      "duration_ms": 0.42
+    },
+    {
+      "kernel_name": "attention_scores_matmul",
+      "duration_ms": 1.55
+    },
+    {
+      "kernel_name": "masked_softmax",
+      "duration_ms": 0.38
+    },
+    {
+      "kernel_name": "attention_value_matmul",
+      "duration_ms": 1.62
+    },
+    {
+      "kernel_name": "mlp_up_proj_matmul",
+      "duration_ms": 1.9
+    },
+    {
+      "kernel_name": "silu_gate",
+      "duration_ms": 0.31
+    },
+    {
+      "kernel_name": "mlp_down_proj_matmul",
+      "duration_ms": 1.7
+    }
+  ]
+}
