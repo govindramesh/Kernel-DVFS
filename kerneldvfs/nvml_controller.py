@@ -47,6 +47,12 @@ class BaseClockController:
     def reset_locked_clocks(self) -> None:
         raise NotImplementedError
 
+    def get_power_usage_mw(self) -> int | None:
+        return None
+
+    def get_total_energy_consumption_mj(self) -> int | None:
+        return None
+
     def close(self) -> None:
         return None
 
@@ -143,6 +149,20 @@ class PynvmlClockController(BaseClockController):
         if errors:
             raise NVMLControllerError("; ".join(errors))
         LOGGER.info("Reset real GPU clock locks")
+
+    def get_power_usage_mw(self) -> int | None:
+        try:
+            return int(pynvml.nvmlDeviceGetPowerUsage(self._handle))
+        except Exception:
+            LOGGER.debug("Failed to query NVML power usage", exc_info=True)
+            return None
+
+    def get_total_energy_consumption_mj(self) -> int | None:
+        try:
+            return int(pynvml.nvmlDeviceGetTotalEnergyConsumption(self._handle))
+        except Exception:
+            LOGGER.debug("Failed to query NVML total energy consumption", exc_info=True)
+            return None
 
     def close(self) -> None:
         try:

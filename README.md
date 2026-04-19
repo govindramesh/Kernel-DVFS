@@ -26,7 +26,7 @@ The project is designed to run in two modes:
 
 ```bash
 python3 example_graph.py --backend torch --device cpu --trace-output data/example_execution_trace.json
-python3 profiler.py --backend mock --output data/profiles.json
+python3 profiler.py --backend mock --measurement-mode mock --output data/profiles.json
 python3 partitioner.py --profiles data/profiles.json --trace data/example_execution_trace.json --output data/superblock_schedule.json
 python3 daemon.py --schedule data/superblock_schedule.json --backend mock
 ```
@@ -84,3 +84,18 @@ If you have CUDA plus Triton available, you can switch to:
 ```bash
 python3 example_graph.py --backend triton --device cuda --dtype float16
 ```
+
+## Real Profiling
+
+`profiler.py` now supports two profiling modes:
+
+- `--measurement-mode mock`: Uses the synthetic runtime and energy model.
+- `--measurement-mode real`: Locks each candidate clock pair, warms up the actual Triton kernels, measures them with CUDA events, and reads energy from NVML when available.
+
+Example GPU run:
+
+```bash
+python3 profiler.py --backend real --measurement-mode real --device-index 0 --warmup-runs 5 --benchmark-runs 25 --output data/profiles.json
+```
+
+If the environment cannot satisfy real profiling requirements, `--measurement-mode auto` will fall back to mock profiling while keeping the output format unchanged.
