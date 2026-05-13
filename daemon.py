@@ -106,6 +106,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--schedule", default="data/superblock_schedule.json")
     parser.add_argument("--backend", choices=["auto", "mock", "real"], default="auto")
     parser.add_argument("--device-index", type=int, default=0)
+    parser.add_argument("--nvidia-smi-path", default=None)
+    parser.add_argument("--nvidia-smi-sudo", action="store_true")
     parser.add_argument("--switching-latency-ms", type=float, default=2.5)
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
@@ -126,6 +128,8 @@ def main() -> None:
         backend=args.backend,
         device_index=args.device_index,
         switching_latency_ms=switching_latency_ms,
+        nvidia_smi_path=args.nvidia_smi_path,
+        nvidia_smi_sudo=args.nvidia_smi_sudo,
     )
     stop_event = threading.Event()
     start_ns = time.perf_counter_ns() + max(5_000_000, int((switching_latency_ms + 0.5) * 1_000_000))

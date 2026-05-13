@@ -1,0 +1,209 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass(frozen=True)
+class PaperKernelSpec:
+    kernel_name: str
+    family: str
+    phase: str
+    baseline_ms: float
+    optimal_core_mhz: int
+    optimal_mem_mhz: int
+    static_power_watts: float
+    dynamic_power_watts: float
+    repeat_count: int = 1
+    m: int = 0
+    n: int = 0
+    k: int = 0
+    rows: int = 0
+    cols: int = 0
+    elements: int = 0
+    heads: int = 0
+    description: str = ""
+
+
+PAPER_CORE_CLOCKS = [630, 840, 1050, 1260, 1470, 1680]
+PAPER_MEMORY_CLOCKS = [5001, 9251, 9501]
+
+
+def _spec(
+    idx: int,
+    name: str,
+    family: str,
+    phase: str,
+    baseline_ms: float,
+    optimal_core_mhz: int,
+    optimal_mem_mhz: int,
+    static_power_watts: float,
+    dynamic_power_watts: float,
+    *,
+    repeat_count: int = 1,
+    m: int = 0,
+    n: int = 0,
+    k: int = 0,
+    rows: int = 0,
+    cols: int = 0,
+    elements: int = 0,
+    heads: int = 0,
+) -> PaperKernelSpec:
+    return PaperKernelSpec(
+        kernel_name=f"k{idx:02d}_{name}",
+        family=family,
+        phase=phase,
+        baseline_ms=baseline_ms,
+        optimal_core_mhz=optimal_core_mhz,
+        optimal_mem_mhz=optimal_mem_mhz,
+        static_power_watts=static_power_watts,
+        dynamic_power_watts=dynamic_power_watts,
+        repeat_count=repeat_count,
+        m=m,
+        n=n,
+        k=k,
+        rows=rows,
+        cols=cols,
+        elements=elements,
+        heads=heads,
+        description=name,
+    )
+
+
+def paper_kernel_specs(num_layers: int = 24) -> list[PaperKernelSpec]:
+    tokens = 512
+    hidden = 1536
+    mlp_hidden = hidden * 4
+    vocab = 4096
+    heads = 16
+    head_dim = hidden // heads
+    attn_rows = tokens * heads
+
+    return [
+        _spec(0, "embedding_wte_wpe", "embedding_add", "embedding", 0.38, 630, 9501, 48.0, 36.0, rows=tokens, cols=hidden, elements=tokens * hidden),
+        _spec(1, "embedding_layernorm", "layernorm", "embedding", 0.47, 1050, 9501, 52.0, 40.0, rows=tokens, cols=hidden),
+        _spec(2, "fwd_attn_qkv_gemm", "gemm", "forward", 1.95, 1680, 5001, 64.0, 148.0, repeat_count=num_layers, m=tokens, n=hidden * 3, k=hidden),
+        _spec(3, "fwd_attn_qkv_permute", "permute", "forward", 0.22, 1680, 9501, 44.0, 30.0, repeat_count=num_layers, rows=tokens, cols=hidden * 3, elements=tokens * hidden * 3),
+        _spec(4, "fwd_attn_scores_gemm", "gemm", "forward", 1.12, 1680, 9501, 62.0, 134.0, repeat_count=num_layers, m=attn_rows, n=tokens, k=head_dim),
+        _spec(5, "fwd_attn_softmax", "softmax", "forward", 0.41, 1050, 9501, 50.0, 42.0, repeat_count=num_layers, rows=attn_rows, cols=tokens),
+        _spec(6, "fwd_attn_value_gemm", "gemm", "forward", 1.06, 1680, 9251, 61.0, 130.0, repeat_count=num_layers, m=attn_rows, n=head_dim, k=tokens),
+        _spec(7, "fwd_attn_context_permute", "permute", "forward", 0.20, 1680, 9251, 44.0, 28.0, repeat_count=num_layers, rows=tokens, cols=hidden, elements=tokens * hidden),
+        _spec(8, "fwd_attn_out_gemm", "gemm", "forward", 1.54, 1680, 5001, 63.0, 142.0, repeat_count=num_layers, m=tokens, n=hidden, k=hidden),
+        _spec(9, "fwd_attn_residual", "residual_add", "forward", 0.18, 840, 9501, 47.0, 32.0, repeat_count=num_layers, rows=tokens, cols=hidden, elements=tokens * hidden),
+        _spec(10, "fwd_mlp_up_gemm", "gemm", "forward", 2.44, 1680, 5001, 66.0, 156.0, repeat_count=num_layers, m=tokens, n=mlp_hidden, k=hidden),
+        _spec(11, "fwd_mlp_gelu", "gelu", "forward", 0.31, 630, 9501, 48.0, 34.0, repeat_count=num_layers, rows=tokens, cols=mlp_hidden, elements=tokens * mlp_hidden),
+        _spec(12, "fwd_mlp_down_gemm", "gemm", "forward", 2.18, 1680, 5001, 66.0, 150.0, repeat_count=num_layers, m=tokens, n=hidden, k=mlp_hidden),
+        _spec(13, "fwd_mlp_residual", "residual_add", "forward", 0.17, 1050, 9501, 47.0, 31.0, repeat_count=num_layers, rows=tokens, cols=hidden, elements=tokens * hidden),
+        _spec(14, "loss_vocab_gemm", "gemm", "loss", 3.22, 1680, 5001, 68.0, 162.0, m=tokens, n=vocab, k=hidden),
+        _spec(15, "loss_softmax", "softmax", "loss", 0.63, 1680, 9501, 52.0, 50.0, rows=tokens, cols=vocab),
+        _spec(16, "loss_reduce_gemm", "gemm", "loss", 0.94, 1680, 9251, 58.0, 106.0, m=tokens, n=hidden, k=vocab),
+        _spec(17, "loss_grad_vocab_gemm", "gemm", "loss", 3.34, 1680, 5001, 68.0, 166.0, m=tokens, n=vocab, k=hidden),
+        _spec(18, "post_loss_layernorm_bwd", "layernorm", "loss", 0.48, 1260, 9501, 53.0, 42.0, rows=tokens, cols=hidden),
+        _spec(19, "bwd_mlp_gelu", "gelu", "backward", 0.34, 630, 9501, 48.0, 35.0, repeat_count=num_layers, rows=tokens, cols=mlp_hidden, elements=tokens * mlp_hidden),
+        _spec(20, "bwd_mlp_bias", "bias_add", "backward", 0.18, 1260, 9501, 48.0, 31.0, repeat_count=num_layers, rows=tokens, cols=mlp_hidden, elements=tokens * mlp_hidden),
+        _spec(21, "bwd_mlp_bias_reduce", "bias_reduce", "backward", 0.09, 1680, 9501, 45.0, 24.0, repeat_count=num_layers, rows=tokens, cols=mlp_hidden),
+        _spec(22, "bwd_mlp_down_gemm", "gemm", "backward", 2.31, 1680, 5001, 66.0, 152.0, repeat_count=num_layers, m=tokens, n=mlp_hidden, k=hidden),
+        _spec(23, "bwd_mlp_gelu_grad", "gelu", "backward", 0.36, 840, 9501, 48.0, 35.0, repeat_count=num_layers, rows=tokens, cols=mlp_hidden, elements=tokens * mlp_hidden),
+        _spec(24, "bwd_mlp_up_gemm", "gemm", "backward", 2.66, 1680, 5001, 67.0, 160.0, repeat_count=num_layers, m=tokens, n=hidden, k=mlp_hidden),
+        _spec(25, "bwd_mlp_out_bias", "bias_add", "backward", 0.17, 1050, 9501, 47.0, 30.0, repeat_count=num_layers, rows=tokens, cols=hidden, elements=tokens * hidden),
+        _spec(26, "bwd_attn_out_gemm", "gemm", "backward", 1.58, 1680, 5001, 64.0, 142.0, repeat_count=num_layers, m=tokens, n=hidden, k=hidden),
+        _spec(27, "bwd_attn_value_gemm", "gemm", "backward", 1.08, 1680, 9251, 61.0, 128.0, repeat_count=num_layers, m=attn_rows, n=tokens, k=head_dim),
+        _spec(28, "bwd_attn_layernorm", "layernorm", "backward", 0.46, 1260, 9501, 52.0, 40.0, repeat_count=num_layers, rows=tokens, cols=hidden),
+        _spec(29, "bwd_attn_bias", "bias_add", "backward", 0.16, 1260, 9501, 47.0, 30.0, repeat_count=num_layers, rows=tokens, cols=hidden, elements=tokens * hidden),
+        _spec(30, "bwd_attn_bias_reduce", "bias_reduce", "backward", 0.08, 1680, 9501, 45.0, 23.0, repeat_count=num_layers, rows=tokens, cols=hidden),
+        _spec(31, "bwd_attn_scores_gemm", "gemm", "backward", 1.18, 1680, 5001, 62.0, 136.0, repeat_count=num_layers, m=attn_rows, n=head_dim, k=tokens),
+        _spec(32, "bwd_attn_probs_gemm", "gemm", "backward", 1.11, 1680, 5001, 62.0, 132.0, repeat_count=num_layers, m=attn_rows, n=tokens, k=head_dim),
+        _spec(33, "bwd_attn_scores_permute", "permute", "backward", 0.19, 1680, 9501, 44.0, 28.0, repeat_count=num_layers, rows=attn_rows, cols=head_dim, elements=attn_rows * head_dim),
+        _spec(34, "bwd_attn_qkv_gemm_a", "gemm", "backward", 1.27, 1680, 9501, 62.0, 133.0, repeat_count=num_layers, m=attn_rows, n=tokens, k=head_dim),
+        _spec(35, "bwd_attn_qkv_gemm_b", "gemm", "backward", 1.02, 1680, 9251, 60.0, 124.0, repeat_count=num_layers, m=attn_rows, n=head_dim, k=tokens),
+        _spec(36, "bwd_attn_softmax", "softmax", "backward", 0.43, 1680, 9501, 50.0, 43.0, repeat_count=num_layers, rows=attn_rows, cols=tokens),
+        _spec(37, "bwd_attn_ctx_gemm", "gemm", "backward", 1.05, 1680, 9251, 61.0, 127.0, repeat_count=num_layers, m=attn_rows, n=head_dim, k=tokens),
+        _spec(38, "bwd_attn_proj_gemm", "gemm", "backward", 1.21, 1680, 9501, 62.0, 134.0, repeat_count=num_layers, m=tokens, n=hidden, k=hidden),
+        _spec(39, "bwd_attn_qkv_permute", "permute", "backward", 0.23, 1470, 9501, 44.0, 31.0, repeat_count=num_layers, rows=tokens, cols=hidden * 3, elements=tokens * hidden * 3),
+        _spec(40, "bwd_attn_input_bias", "bias_add", "backward", 0.17, 1260, 9501, 47.0, 30.0, repeat_count=num_layers, rows=tokens, cols=hidden, elements=tokens * hidden),
+        _spec(41, "bwd_attn_input_gemm", "gemm", "backward", 2.02, 1680, 5001, 64.0, 146.0, repeat_count=num_layers, m=tokens, n=hidden * 3, k=hidden),
+        _spec(42, "bwd_attn_output_gemm", "gemm", "backward", 1.36, 1680, 9501, 63.0, 138.0, repeat_count=num_layers, m=tokens, n=hidden, k=hidden),
+        _spec(43, "bwd_attn_output_layernorm", "layernorm", "backward", 0.47, 1260, 9501, 52.0, 40.0, repeat_count=num_layers, rows=tokens, cols=hidden),
+        _spec(44, "embedding_wpe_backward", "embedding_backward", "embedding_backward", 0.29, 1260, 9501, 49.0, 33.0, rows=tokens, cols=hidden, elements=tokens * hidden),
+        _spec(45, "embedding_wte_backward", "embedding_backward", "embedding_backward", 0.41, 1680, 9501, 51.0, 37.0, rows=tokens, cols=hidden, elements=tokens * hidden),
+    ]
+
+
+def expanded_trace_specs(num_layers: int = 24) -> list[PaperKernelSpec]:
+    expanded: list[PaperKernelSpec] = []
+    for spec in paper_kernel_specs(num_layers=num_layers):
+        expanded.extend([spec] * spec.repeat_count)
+    return expanded
+
+
+def family_category(family: str) -> str:
+    if family == "gemm":
+        return "compute"
+    return "memory"
+
+
+def spec_shapes(spec: PaperKernelSpec) -> dict[str, int]:
+    return {
+        "m": spec.m,
+        "n": spec.n,
+        "k": spec.k,
+        "rows": spec.rows,
+        "cols": spec.cols,
+        "elements": spec.elements,
+        "heads": spec.heads,
+        "repeat_count": spec.repeat_count,
+    }
+
+
+def build_family_inputs(spec: PaperKernelSpec, torch: Any, device: str, dtype: Any) -> tuple[Any, ...]:
+    if spec.family == "gemm":
+        return (
+            torch.randn((spec.m, spec.k), device=device, dtype=dtype),
+            torch.randn((spec.k, spec.n), device=device, dtype=dtype),
+        )
+    if spec.family == "softmax":
+        return (torch.randn((spec.rows, spec.cols), device=device, dtype=dtype),)
+    if spec.family == "layernorm":
+        return (
+            torch.randn((spec.rows, spec.cols), device=device, dtype=dtype),
+            torch.randn((spec.cols,), device=device, dtype=dtype),
+        )
+    if spec.family in {"gelu", "permute", "embedding_backward"}:
+        width = spec.cols or spec.elements or 1
+        return (torch.randn((spec.rows, width), device=device, dtype=dtype),)
+    if spec.family in {"residual_add", "bias_add", "embedding_add"}:
+        return (
+            torch.randn((spec.rows, spec.cols), device=device, dtype=dtype),
+            torch.randn((spec.rows, spec.cols), device=device, dtype=dtype),
+        )
+    if spec.family == "bias_reduce":
+        return (torch.randn((spec.rows, spec.cols), device=device, dtype=dtype),)
+    raise ValueError(f"Unsupported paper kernel family '{spec.family}'")
+
+
+def run_family_kernel(spec: PaperKernelSpec, torch: Any, args: tuple[Any, ...]) -> Any:
+    if spec.family == "gemm":
+        left, right = args
+        return torch.matmul(left, right)
+    if spec.family == "softmax":
+        (x,) = args
+        return torch.softmax(x, dim=-1)
+    if spec.family == "layernorm":
+        x, weight = args
+        return torch.nn.functional.layer_norm(x, (x.shape[-1],), weight=weight)
+    if spec.family == "gelu":
+        (x,) = args
+        return torch.nn.functional.gelu(x)
+    if spec.family == "permute":
+        (x,) = args
+        return x.reshape(x.shape[0], -1, max(1, x.shape[1] // max(1, spec.heads or 1))).transpose(0, 1).contiguous()
+    if spec.family in {"residual_add", "bias_add", "embedding_add"}:
+        left, right = args
+        return left + right
+    if spec.family == "bias_reduce":
+        (x,) = args
+        return x.sum(dim=0)
+    if spec.family == "embedding_backward":
+        (x,) = args
+        return x.sum(dim=0)
+    raise ValueError(f"Unsupported paper kernel family '{spec.family}'")

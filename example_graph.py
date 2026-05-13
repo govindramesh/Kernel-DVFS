@@ -7,6 +7,7 @@ import time
 from typing import Any, Callable
 
 from kerneldvfs.models import write_json
+from kerneldvfs.paper_recreation import expanded_trace_specs, paper_kernel_specs, spec_shapes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -286,7 +287,8 @@ def build_graph(config: GraphConfig, runtime: str) -> tuple[dict[str, Any], list
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a synthetic transformer-style kernel graph and emit a trace")
+    parser = argparse.ArgumentParser(description="Emit an execution trace for either the MVP block or the paper-style GPT iteration")
+    parser.add_argument("--scenario", choices=["paper_iteration", "synthetic_block"], default="paper_iteration")
     parser.add_argument("--backend", choices=["auto", "torch", "triton"], default="auto")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="float32")
@@ -295,26 +297,57 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-size", type=int, default=128)
     parser.add_argument("--num-heads", type=int, default=4)
     parser.add_argument("--mlp-ratio", type=int, default=4)
+    parser.add_argument("--num-layers", type=int, default=24)
     parser.add_argument("--graph-output", default="data/example_graph.json")
     parser.add_argument("--trace-output", default="data/example_execution_trace.json")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
 
 
+def build_paper_iteration(num_layers: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    unique_specs = paper_kernel_specs(num_layers=num_layers)
+    expanded_specs = expanded_trace_specs(num_layers=num_layers)
+    graph = {
+        "metadata": {
+            "graph_name": "paper_gpt3_iteration",
+            "scenario": "paper_iteration",
+            "num_unique_kernels": len(unique_specs),
+            "num_layers": num_layers,
+            "expanded_kernel_invocations": len(expanded_specs),
+        },
+        "nodes": [
+            {
+                "kernel_name": spec.kernel_name,
+                "phase": spec.phase,
+                "family": spec.family,
+                "repeat_count": spec.repeat_count,
+                "shape": spec_shapes(spec),
+                "description": spec.description,
+            }
+            for spec in unique_specs
+        ],
+    }
+    trace = [{"kernel_name": spec.kernel_name, "duration_ms": round(spec.baseline_ms, 6)} for spec in expanded_specs]
+    return graph, trace
+
+
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
-    config = GraphConfig(
-        batch_size=args.batch_size,
-        seq_len=args.seq_len,
-        hidden_size=args.hidden_size,
-        num_heads=args.num_heads,
-        mlp_ratio=args.mlp_ratio,
-        dtype=args.dtype,
-        device=args.device,
-    )
-    runtime = select_runtime(args.backend, args.device)
-    graph, trace = build_graph(config=config, runtime=runtime)
+    if args.scenario == "paper_iteration":
+        graph, trace = build_paper_iteration(num_layers=args.num_layers)
+    else:
+        config = GraphConfig(
+            batch_size=args.batch_size,
+            seq_len=args.seq_len,
+            hidden_size=args.hidden_size,
+            num_heads=args.num_heads,
+            mlp_ratio=args.mlp_ratio,
+            dtype=args.dtype,
+            device=args.device,
+        )
+        runtime = select_runtime(args.backend, args.device)
+        graph, trace = build_graph(config=config, runtime=runtime)
 
     write_json(args.graph_output, graph)
     write_json(
@@ -322,7 +355,11 @@ def main() -> None:
         {
             "metadata": {
                 **graph["metadata"],
-                "description": "Measured execution trace for the synthetic transformer block",
+                "description": (
+                    "Paper-style GPT-3 training iteration trace with per-invocation kernels"
+                    if args.scenario == "paper_iteration"
+                    else "Measured execution trace for the synthetic transformer block"
+                ),
             },
             "trace": trace,
         },

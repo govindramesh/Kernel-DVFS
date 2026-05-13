@@ -2,26 +2,22 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-import importlib
 import logging
 import time
 from typing import Any
 
 from kerneldvfs.models import ClockSetting, ProfileResult, write_json
 from kerneldvfs.nvml_controller import BaseClockController, create_clock_controller
+from kerneldvfs.paper_recreation import (
+    PaperKernelSpec,
+    build_family_inputs,
+    family_category,
+    paper_kernel_specs,
+    run_family_kernel,
+    spec_shapes,
+)
 
 LOGGER = logging.getLogger(__name__)
-
-KERNEL_ENTRYPOINTS = {
-    "fused_qkv_matmul": "launch_matmul",
-    "attention_scores_matmul": "launch_matmul",
-    "attention_value_matmul": "launch_matmul",
-    "mlp_up_proj_matmul": "launch_matmul",
-    "mlp_down_proj_matmul": "launch_matmul",
-    "rmsnorm": "launch_rmsnorm",
-    "masked_softmax": "launch_softmax",
-    "silu_gate": "launch_silu_gate",
-}
 
 try:
     import kernel_tuner  # type: ignore  # noqa: F401
@@ -62,30 +58,38 @@ class MeasurementConfig:
 @dataclass
 class RealMeasurementContext:
     torch: Any
-    kernels_module: Any
     inputs: dict[str, Any]
-    launchers: dict[str, Any]
     energy_source: str
 
 
-def default_workloads() -> list[KernelWorkload]:
+def default_workloads(num_layers: int) -> list[KernelWorkload]:
+    specs = paper_kernel_specs(num_layers=num_layers)
     return [
-        KernelWorkload("fused_qkv_matmul", "compute", 1.80, 1230, 1215, 62.0, 126.0),
-        KernelWorkload("rmsnorm", "memory", 0.42, 1080, 1215, 48.0, 52.0),
-        KernelWorkload("attention_scores_matmul", "compute", 1.55, 1230, 1215, 60.0, 118.0),
-        KernelWorkload("masked_softmax", "memory", 0.38, 1080, 1593, 46.0, 54.0),
-        KernelWorkload("attention_value_matmul", "compute", 1.62, 1230, 1215, 60.0, 120.0),
-        KernelWorkload("mlp_up_proj_matmul", "compute", 1.90, 1410, 1215, 66.0, 140.0),
-        KernelWorkload("silu_gate", "memory", 0.31, 1080, 1215, 45.0, 42.0),
-        KernelWorkload("mlp_down_proj_matmul", "compute", 1.70, 1230, 1215, 62.0, 128.0),
+        KernelWorkload(
+            kernel_name=spec.kernel_name,
+            category=family_category(spec.family),
+            baseline_ms=spec.baseline_ms,
+            optimal_core_mhz=spec.optimal_core_mhz,
+            optimal_mem_mhz=spec.optimal_mem_mhz,
+            static_power_watts=spec.static_power_watts,
+            dynamic_power_watts=spec.dynamic_power_watts,
+        )
+        for spec in specs
     ]
 
 
 class BenchmarkHarness:
-    def __init__(self, controller: BaseClockController, margin_ms: float, measurement: MeasurementConfig) -> None:
+    def __init__(
+        self,
+        controller: BaseClockController,
+        tolerated_slowdown_pct: float,
+        measurement: MeasurementConfig,
+        specs: list[PaperKernelSpec],
+    ) -> None:
         self.controller = controller
-        self.margin_ms = margin_ms
+        self.tolerated_slowdown_pct = tolerated_slowdown_pct
         self.measurement = measurement
+        self.specs = {spec.kernel_name: spec for spec in specs}
         self._resolved_measurement_mode: str | None = None
         self._real_context: RealMeasurementContext | None = None
 
@@ -116,52 +120,39 @@ class BenchmarkHarness:
         if not torch.cuda.is_available():
             raise RuntimeError("torch.cuda.is_available() is false")
 
-        kernels_module = importlib.import_module("kerneldvfs.kernels")
-        if not getattr(kernels_module, "TRITON_AVAILABLE", False):
-            raise RuntimeError("kerneldvfs.kernels could not initialize Triton")
-
         torch.cuda.set_device(self.measurement.device)
-        inputs = kernels_module.example_inputs(device=self.measurement.device)
-        launchers = {
-            "fused_qkv_matmul": kernels_module.launch_matmul,
-            "attention_scores_matmul": kernels_module.launch_matmul,
-            "attention_value_matmul": kernels_module.launch_matmul,
-            "mlp_up_proj_matmul": kernels_module.launch_matmul,
-            "mlp_down_proj_matmul": kernels_module.launch_matmul,
-            "rmsnorm": kernels_module.launch_rmsnorm,
-            "masked_softmax": kernels_module.launch_softmax,
-            "silu_gate": kernels_module.launch_silu_gate,
+        dtype = torch.float16
+        inputs = {
+            spec.kernel_name: build_family_inputs(spec, torch=torch, device=self.measurement.device, dtype=dtype)
+            for spec in self.specs.values()
         }
         energy_source = "nvml_total_energy" if self.controller.get_total_energy_consumption_mj() is not None else "nvml_power_samples"
         return RealMeasurementContext(
             torch=torch,
-            kernels_module=kernels_module,
             inputs=inputs,
-            launchers=launchers,
             energy_source=energy_source,
         )
 
     def profile(self, workloads: list[KernelWorkload]) -> list[ProfileResult]:
         measurement_mode = self._resolve_measurement_mode()
-        supported_pairs = self.controller.get_supported_clock_pairs()
-        max_pair = max(supported_pairs, key=lambda pair: pair.score())
-        ascending_pairs = sorted(supported_pairs, key=lambda pair: pair.score())
+        candidate_pairs = self.controller.get_supported_clock_pairs()
         results: list[ProfileResult] = []
 
         for workload in workloads:
-            baseline_ms, baseline_energy = self._measure(workload, max_pair)
-            selected_clock = max_pair
+            baseline_ms, baseline_energy = self._measure_auto(workload)
+            selected_clock = max(candidate_pairs, key=lambda pair: pair.score())
             selected_runtime_ms = baseline_ms
             selected_energy = baseline_energy
 
-            for candidate in ascending_pairs:
+            for candidate in candidate_pairs:
                 runtime_ms, energy_mj = self._measure(workload, candidate)
-                if runtime_ms <= baseline_ms + self.margin_ms:
+                allowed_runtime_ms = baseline_ms * (1.0 + self.tolerated_slowdown_pct / 100.0)
+                if runtime_ms <= allowed_runtime_ms and energy_mj <= selected_energy:
                     selected_clock = candidate
                     selected_runtime_ms = runtime_ms
                     selected_energy = energy_mj
-                    break
 
+            spec = self.specs[workload.kernel_name]
             result = ProfileResult(
                 kernel_name=workload.kernel_name,
                 target_clock=selected_clock,
@@ -171,8 +162,13 @@ class BenchmarkHarness:
                 backend=self.controller.mode,
                 metadata={
                     "category": workload.category,
-                    "margin_ms": self.margin_ms,
-                    "supported_pairs": len(supported_pairs),
+                    "family": spec.family,
+                    "phase": spec.phase,
+                    "paper_kernel_description": spec.description,
+                    "repeat_count": spec.repeat_count,
+                    "shapes": spec_shapes(spec),
+                    "tolerated_slowdown_pct": self.tolerated_slowdown_pct,
+                    "supported_pairs": len(candidate_pairs),
                     "kernel_tuner_available": kernel_tuner is not None,
                     "torch_available": torch is not None,
                     "triton_available": triton is not None,
@@ -194,24 +190,39 @@ class BenchmarkHarness:
             results.append(result)
         return results
 
+    def _measure_auto(self, workload: KernelWorkload) -> tuple[float, float]:
+        if self._resolve_measurement_mode() == "real":
+            return self._measure_real_auto(workload)
+        return self._measure_mock_auto(workload)
+
     def _measure(self, workload: KernelWorkload, setting: ClockSetting) -> tuple[float, float]:
         if self._resolve_measurement_mode() == "real":
             return self._measure_real(workload, setting)
         return self._measure_mock(workload, setting)
 
+    def _measure_real_auto(self, workload: KernelWorkload) -> tuple[float, float]:
+        try:
+            self.controller.reset_locked_clocks()
+        except Exception:
+            LOGGER.debug("Failed to reset clocks before auto baseline measurement", exc_info=True)
+        time.sleep(max(self.measurement.settle_time_ms, self.controller.switching_latency_ms) / 1000.0)
+        return self._measure_real_impl(workload)
+
     def _measure_real(self, workload: KernelWorkload, setting: ClockSetting) -> tuple[float, float]:
+        self.controller.set_locked_clocks(setting)
+        time.sleep(max(self.measurement.settle_time_ms, self.controller.switching_latency_ms) / 1000.0)
+        return self._measure_real_impl(workload)
+
+    def _measure_real_impl(self, workload: KernelWorkload) -> tuple[float, float]:
         assert self._real_context is not None
         context = self._real_context
-        launch = context.launchers[workload.kernel_name]
+        spec = self.specs[workload.kernel_name]
         args = context.inputs[workload.kernel_name]
         if not isinstance(args, tuple):
             args = (args,)
 
-        self.controller.set_locked_clocks(setting)
-        time.sleep(max(self.measurement.settle_time_ms, self.controller.switching_latency_ms) / 1000.0)
-
         for _ in range(self.measurement.warmup_runs):
-            launch(*args)
+            run_family_kernel(spec, torch=context.torch, args=args)
         context.torch.cuda.synchronize()
 
         start_energy_mj = self.controller.get_total_energy_consumption_mj()
@@ -223,7 +234,7 @@ class BenchmarkHarness:
             start_event = context.torch.cuda.Event(enable_timing=True)
             end_event = context.torch.cuda.Event(enable_timing=True)
             start_event.record()
-            launch(*args)
+            run_family_kernel(spec, torch=context.torch, args=args)
             end_event.record()
             context.torch.cuda.synchronize()
             elapsed_ms = float(start_event.elapsed_time(end_event))
@@ -240,6 +251,20 @@ class BenchmarkHarness:
             energy_mj = sampled_energy_mj / max(self.measurement.benchmark_runs, 1)
         return runtime_ms, energy_mj
 
+    def _measure_mock_auto(self, workload: KernelWorkload) -> tuple[float, float]:
+        runtime_ms = workload.baseline_ms
+        auto_core_mhz = max(workload.optimal_core_mhz, 1680)
+        auto_mem_mhz = max(workload.optimal_mem_mhz, 9501)
+        power_watts = workload.static_power_watts + workload.dynamic_power_watts
+        energy_mj = power_watts * (runtime_ms / 1000.0) * 1000.0
+        LOGGER.debug(
+            "Mock auto baseline for %s assumed at core=%s mem=%s",
+            workload.kernel_name,
+            auto_core_mhz,
+            auto_mem_mhz,
+        )
+        return runtime_ms, energy_mj
+
     def _measure_mock(self, workload: KernelWorkload, setting: ClockSetting) -> tuple[float, float]:
         core_penalty = max(0.0, workload.optimal_core_mhz - setting.core_mhz) / max(workload.optimal_core_mhz, 1)
         mem_penalty = max(0.0, workload.optimal_mem_mhz - setting.mem_mhz) / max(workload.optimal_mem_mhz, 1)
@@ -251,8 +276,8 @@ class BenchmarkHarness:
 
         runtime_ms = workload.baseline_ms * slowdown_factor
         power_watts = workload.static_power_watts + workload.dynamic_power_watts * (
-            0.55 * (setting.core_mhz / max(workload.optimal_core_mhz, setting.core_mhz))
-            + 0.45 * (setting.mem_mhz / max(workload.optimal_mem_mhz, setting.mem_mhz))
+            0.55 * (setting.core_mhz / max(workload.optimal_core_mhz, 1))
+            + 0.45 * (setting.mem_mhz / max(workload.optimal_mem_mhz, 1))
         )
         energy_mj = power_watts * (runtime_ms / 1000.0) * 1000.0
         return runtime_ms, energy_mj
@@ -269,7 +294,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--backend", choices=["auto", "mock", "real"], default="auto")
     parser.add_argument("--measurement-mode", choices=["auto", "mock", "real"], default="auto")
     parser.add_argument("--device-index", type=int, default=0)
-    parser.add_argument("--margin-ms", type=float, default=0.02)
+    parser.add_argument("--nvidia-smi-path", default=None)
+    parser.add_argument("--nvidia-smi-sudo", action="store_true")
+    parser.add_argument("--tolerated-slowdown-pct", type=float, default=0.0)
+    parser.add_argument("--num-layers", type=int, default=24)
     parser.add_argument("--switching-latency-ms", type=float, default=2.5)
     parser.add_argument("--warmup-runs", type=int, default=5)
     parser.add_argument("--benchmark-runs", type=int, default=25)
@@ -284,16 +312,19 @@ def build_output(results: list[ProfileResult], args: argparse.Namespace) -> dict
         "metadata": {
             "backend": args.backend,
             "device_index": args.device_index,
-            "margin_ms": args.margin_ms,
+            "num_layers": args.num_layers,
+            "tolerated_slowdown_pct": args.tolerated_slowdown_pct,
             "switching_latency_ms": args.switching_latency_ms,
             "measurement_mode": args.measurement_mode,
+            "nvidia_smi_path": args.nvidia_smi_path,
+            "nvidia_smi_sudo": args.nvidia_smi_sudo,
             "warmup_runs": args.warmup_runs,
             "benchmark_runs": args.benchmark_runs,
             "settle_time_ms": args.settle_time_ms,
             "workload_count": len(results),
-            "kernel_module": "kerneldvfs/kernels.py",
-            "kernel_entrypoints": KERNEL_ENTRYPOINTS,
-            "benchmarkable_kernels": list(KERNEL_ENTRYPOINTS.keys()),
+            "profile_style": "paper_local_waste",
+            "baseline_clock_mode": "auto",
+            "benchmarkable_kernels": [result.kernel_name for result in results],
         },
         "profiles": {result.kernel_name: result.to_dict() for result in results},
     }
@@ -306,6 +337,8 @@ def main() -> None:
         backend=args.backend,
         device_index=args.device_index,
         switching_latency_ms=args.switching_latency_ms,
+        nvidia_smi_path=args.nvidia_smi_path,
+        nvidia_smi_sudo=args.nvidia_smi_sudo,
     )
     try:
         measurement = MeasurementConfig(
@@ -315,8 +348,14 @@ def main() -> None:
             device=f"cuda:{args.device_index}",
             settle_time_ms=args.settle_time_ms,
         )
-        harness = BenchmarkHarness(controller=controller, margin_ms=args.margin_ms, measurement=measurement)
-        results = harness.profile(default_workloads())
+        specs = paper_kernel_specs(num_layers=args.num_layers)
+        harness = BenchmarkHarness(
+            controller=controller,
+            tolerated_slowdown_pct=args.tolerated_slowdown_pct,
+            measurement=measurement,
+            specs=specs,
+        )
+        results = harness.profile(default_workloads(num_layers=args.num_layers))
         payload = build_output(results, args)
         write_json(args.output, payload)
         LOGGER.info("Wrote profiles to %s", args.output)
