@@ -23,6 +23,7 @@ The project is designed to run in two modes:
 - `kerneldvfs/nvml_controller.py`: Real and mock NVML control paths.
 - `kerneldvfs/paper_recreation.py`: Paper kernel catalog, paper clock domains, and benchmark families.
 - `runtime_compare.py`: Sequential workload runner for `auto` vs profiled-clock comparison, including measured clock transition latency.
+- `dashboard.py`: Standalone HTML dashboard generator for per-kernel profiling and runtime comparison outputs.
 - `data/execution_trace.json`: Sample transformer-layer execution trace.
 
 ## Quickstart
@@ -41,6 +42,7 @@ Once you have a real profile file, you can compare the sequential workload under
 ```bash
 python3 profiler.py --backend real --measurement-mode real --device-index 0 --tolerated-slowdown-pct 0.0 --output data/profiles.json
 python3 runtime_compare.py --backend real --device-index 0 --device cuda:0 --profiles data/profiles.json --mode both --output data/runtime_comparison.json
+python3 dashboard.py --profiles data/profiles.json --runtime-compare data/runtime_comparison.json --output data/dashboard.html
 ```
 
 `runtime_compare.py`:
@@ -49,6 +51,12 @@ python3 runtime_compare.py --backend real --device-index 0 --device cuda:0 --pro
 - uses `auto` clocks for one run
 - uses the profiled target clocks before every kernel event for the second run
 - records total workload wall time, summed kernel runtime, estimated energy, and observed clock-transition latency
+
+`dashboard.py`:
+
+- builds a standalone local HTML page
+- shows a top kernel table with auto vs ideal runtime and energy
+- shows the bottom whole-workload comparison from `runtime_compare.py`
 
 ## Dependency Notes
 

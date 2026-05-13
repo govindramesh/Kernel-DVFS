@@ -157,6 +157,7 @@ class BenchmarkHarness:
                 kernel_name=workload.kernel_name,
                 target_clock=selected_clock,
                 baseline_ms=baseline_ms,
+                baseline_energy_mj=baseline_energy,
                 selected_runtime_ms=selected_runtime_ms,
                 estimated_energy_mj=selected_energy,
                 backend=self.controller.mode,

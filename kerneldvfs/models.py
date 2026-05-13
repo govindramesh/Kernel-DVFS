@@ -23,6 +23,7 @@ class ProfileResult:
     kernel_name: str
     target_clock: ClockSetting
     baseline_ms: float
+    baseline_energy_mj: float | None
     selected_runtime_ms: float
     estimated_energy_mj: float
     backend: str
@@ -39,6 +40,9 @@ class ProfileResult:
             kernel_name=payload["kernel_name"],
             target_clock=ClockSetting(**payload["target_clock"]),
             baseline_ms=float(payload["baseline_ms"]),
+            baseline_energy_mj=(
+                None if payload.get("baseline_energy_mj") is None else float(payload["baseline_energy_mj"])
+            ),
             selected_runtime_ms=float(payload["selected_runtime_ms"]),
             estimated_energy_mj=float(payload["estimated_energy_mj"]),
             backend=str(payload["backend"]),

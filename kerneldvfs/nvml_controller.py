@@ -147,6 +147,10 @@ class PynvmlClockController(BaseClockController):
         return deduped
 
     def set_locked_clocks(self, setting: ClockSetting) -> None:
+        if self._use_sudo_for_nvidia_smi:
+            self._set_clocks_via_nvidia_smi(setting)
+            return
+
         try:
             pynvml.nvmlDeviceSetMemoryLockedClocks(self._handle, setting.mem_mhz, setting.mem_mhz)
             pynvml.nvmlDeviceSetGpuLockedClocks(self._handle, setting.core_mhz, setting.core_mhz)
@@ -182,6 +186,14 @@ class PynvmlClockController(BaseClockController):
 
     def reset_locked_clocks(self) -> None:
         errors: list[str] = []
+        if self._use_sudo_for_nvidia_smi and self._clock_api in ("nvidia_smi_locked_clocks", "applications_clocks", None):
+            try:
+                self._reset_clocks_via_nvidia_smi()
+                LOGGER.info("Reset real GPU clock locks")
+                return
+            except Exception as exc:
+                errors.append(str(exc))
+
         if self._clock_api in (None, "locked_clocks"):
             try:
                 pynvml.nvmlDeviceResetGpuLockedClocks(self._handle)
