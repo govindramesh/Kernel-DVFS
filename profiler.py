@@ -18,6 +18,12 @@ from kerneldvfs.paper_recreation import (
 )
 
 LOGGER = logging.getLogger(__name__)
+CONTROLLER_LOGGER = logging.getLogger("kerneldvfs.nvml_controller")
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
 
 try:
     import kernel_tuner  # type: ignore  # noqa: F401
@@ -165,13 +171,28 @@ class BenchmarkHarness:
         candidate_pairs = self._candidate_pairs()
         results: list[ProfileResult] = []
 
-        for workload in workloads:
+        for workload_index, workload in enumerate(workloads, start=1):
+            LOGGER.info(
+                "Profiling kernel %d/%d: %s",
+                workload_index,
+                len(workloads),
+                workload.kernel_name,
+            )
             baseline_ms, baseline_energy = self._measure_auto(workload)
             selected_clock = max(candidate_pairs, key=lambda pair: pair.score())
             selected_runtime_ms = baseline_ms
             selected_energy = baseline_energy
 
-            for candidate in candidate_pairs:
+            candidate_iterable = candidate_pairs
+            if tqdm is not None:
+                candidate_iterable = tqdm(
+                    candidate_pairs,
+                    desc=f"{workload.kernel_name}",
+                    unit="clock",
+                    leave=False,
+                )
+
+            for candidate in candidate_iterable:
                 runtime_ms, energy_mj = self._measure(workload, candidate)
                 allowed_runtime_ms = baseline_ms * (1.0 + self.tolerated_slowdown_pct / 100.0)
                 if runtime_ms <= allowed_runtime_ms and energy_mj <= selected_energy:
@@ -400,6 +421,7 @@ def build_output(results: list[ProfileResult], args: argparse.Namespace) -> dict
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
+    CONTROLLER_LOGGER.setLevel(logging.WARNING)
     controller = create_clock_controller(
         backend=args.backend,
         device_index=args.device_index,
