@@ -287,7 +287,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="float16")
     parser.add_argument("--mode", choices=["auto", "profiled", "both"], default="both")
     parser.add_argument("--iterations", type=int, default=1)
-    parser.add_argument("--num-layers", type=int, default=24)
+    parser.add_argument("--num-layers", type=int, default=12)
     parser.add_argument("--poll-interval-us", type=int, default=100)
     parser.add_argument("--transition-timeout-ms", type=float, default=50.0)
     parser.add_argument("--switching-latency-ms", type=float, default=2.5)

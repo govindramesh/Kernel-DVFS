@@ -49,10 +49,13 @@ class KernelWorkload:
 @dataclass(frozen=True)
 class MeasurementConfig:
     mode: str
-    warmup_runs: int
-    benchmark_runs: int
     device: str
     settle_time_ms: float
+    gpu_warmup_s: float
+    candidate_warmup_s: float
+    benchmark_window_s: float
+    allowed_core_clocks_mhz: tuple[int, ...] | None
+    allowed_mem_clocks_mhz: tuple[int, ...] | None
 
 
 @dataclass
@@ -92,6 +95,7 @@ class BenchmarkHarness:
         self.specs = {spec.kernel_name: spec for spec in specs}
         self._resolved_measurement_mode: str | None = None
         self._real_context: RealMeasurementContext | None = None
+        self._gpu_warmup_completed = False
 
     def _resolve_measurement_mode(self) -> str:
         if self._resolved_measurement_mode is not None:
@@ -133,9 +137,32 @@ class BenchmarkHarness:
             energy_source=energy_source,
         )
 
+    def _ensure_real_gpu_warmup(self) -> None:
+        if self._gpu_warmup_completed:
+            return
+        assert self._real_context is not None
+        max_pair = max(self.controller.get_supported_clock_pairs(), key=lambda pair: pair.score())
+        self.controller.set_locked_clocks(max_pair)
+        time.sleep(max(self.measurement.settle_time_ms, self.controller.switching_latency_ms) / 1000.0)
+        end_time = time.perf_counter() + self.measurement.gpu_warmup_s
+        LOGGER.info("Starting one-time GPU warmup for %.1fs at max clocks", self.measurement.gpu_warmup_s)
+        specs = list(self.specs.values())
+        index = 0
+        while time.perf_counter() < end_time:
+            spec = specs[index % len(specs)]
+            args = self._real_context.inputs[spec.kernel_name]
+            if not isinstance(args, tuple):
+                args = (args,)
+            run_family_kernel(spec, torch=self._real_context.torch, args=args)
+            index += 1
+        self._real_context.torch.cuda.synchronize()
+        self._gpu_warmup_completed = True
+
     def profile(self, workloads: list[KernelWorkload]) -> list[ProfileResult]:
         measurement_mode = self._resolve_measurement_mode()
-        candidate_pairs = self.controller.get_supported_clock_pairs()
+        if measurement_mode == "real":
+            self._ensure_real_gpu_warmup()
+        candidate_pairs = self._candidate_pairs()
         results: list[ProfileResult] = []
 
         for workload in workloads:
@@ -174,8 +201,9 @@ class BenchmarkHarness:
                     "torch_available": torch is not None,
                     "triton_available": triton is not None,
                     "measurement_mode": measurement_mode,
-                    "warmup_runs": self.measurement.warmup_runs,
-                    "benchmark_runs": self.measurement.benchmark_runs,
+                    "gpu_warmup_s": self.measurement.gpu_warmup_s,
+                    "candidate_warmup_s": self.measurement.candidate_warmup_s,
+                    "benchmark_window_s": self.measurement.benchmark_window_s,
                     "energy_source": self._energy_source(measurement_mode),
                 },
             )
@@ -190,6 +218,27 @@ class BenchmarkHarness:
             )
             results.append(result)
         return results
+
+    def _candidate_pairs(self) -> list[ClockSetting]:
+        pairs = self.controller.get_supported_clock_pairs()
+        if self.controller.mode != "real":
+            return pairs
+        allowed_core = self.measurement.allowed_core_clocks_mhz
+        allowed_mem = self.measurement.allowed_mem_clocks_mhz
+        if allowed_core is None and allowed_mem is None:
+            return pairs
+        filtered = [
+            pair
+            for pair in pairs
+            if (allowed_core is None or pair.core_mhz in allowed_core)
+            and (allowed_mem is None or pair.mem_mhz in allowed_mem)
+        ]
+        if not filtered:
+            raise RuntimeError(
+                "No supported clock pairs remain after applying the configured real-mode clock filters"
+            )
+        LOGGER.info("Filtered clock candidates from %d to %d pairs", len(pairs), len(filtered))
+        return filtered
 
     def _measure_auto(self, workload: KernelWorkload) -> tuple[float, float]:
         if self._resolve_measurement_mode() == "real":
@@ -222,15 +271,17 @@ class BenchmarkHarness:
         if not isinstance(args, tuple):
             args = (args,)
 
-        for _ in range(self.measurement.warmup_runs):
+        warmup_end = time.perf_counter() + self.measurement.candidate_warmup_s
+        while time.perf_counter() < warmup_end:
             run_family_kernel(spec, torch=context.torch, args=args)
         context.torch.cuda.synchronize()
 
         start_energy_mj = self.controller.get_total_energy_consumption_mj()
-        timings_ms: list[float] = []
+        start_window_ns = time.perf_counter_ns()
         sampled_energy_mj = 0.0
-
-        for _ in range(self.measurement.benchmark_runs):
+        timings_ms: list[float] = []
+        benchmark_end = time.perf_counter() + self.measurement.benchmark_window_s
+        while time.perf_counter() < benchmark_end:
             start_power_mw = self.controller.get_power_usage_mw()
             start_event = context.torch.cuda.Event(enable_timing=True)
             end_event = context.torch.cuda.Event(enable_timing=True)
@@ -245,11 +296,20 @@ class BenchmarkHarness:
                 sampled_energy_mj += ((start_power_mw + end_power_mw) / 2.0) * elapsed_ms / 1000.0
 
         end_energy_mj = self.controller.get_total_energy_consumption_mj()
+        if not timings_ms:
+            raise RuntimeError(f"No benchmark samples collected for {workload.kernel_name}")
         runtime_ms = sum(timings_ms) / len(timings_ms)
+        measured_window_ms = (time.perf_counter_ns() - start_window_ns) / 1_000_000.0
         if start_energy_mj is not None and end_energy_mj is not None and end_energy_mj >= start_energy_mj:
-            energy_mj = (end_energy_mj - start_energy_mj) / max(self.measurement.benchmark_runs, 1)
+            energy_mj = (end_energy_mj - start_energy_mj) / max(len(timings_ms), 1)
         else:
-            energy_mj = sampled_energy_mj / max(self.measurement.benchmark_runs, 1)
+            energy_mj = sampled_energy_mj / max(len(timings_ms), 1)
+        LOGGER.debug(
+            "Measured %s for %.2fms wall-clock with %d samples",
+            workload.kernel_name,
+            measured_window_ms,
+            len(timings_ms),
+        )
         return runtime_ms, energy_mj
 
     def _measure_mock_auto(self, workload: KernelWorkload) -> tuple[float, float]:
@@ -298,11 +358,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nvidia-smi-path", default=None)
     parser.add_argument("--nvidia-smi-sudo", action="store_true")
     parser.add_argument("--tolerated-slowdown-pct", type=float, default=0.0)
-    parser.add_argument("--num-layers", type=int, default=24)
+    parser.add_argument("--num-layers", type=int, default=12)
     parser.add_argument("--switching-latency-ms", type=float, default=2.5)
-    parser.add_argument("--warmup-runs", type=int, default=5)
-    parser.add_argument("--benchmark-runs", type=int, default=25)
     parser.add_argument("--settle-time-ms", type=float, default=10.0)
+    parser.add_argument("--gpu-warmup-s", type=float, default=100.0)
+    parser.add_argument("--candidate-warmup-s", type=float, default=2.0)
+    parser.add_argument("--benchmark-window-s", type=float, default=5.0)
+    parser.add_argument("--core-clocks", type=int, nargs="*", default=[2100, 2400, 2700, 3000, 3090])
+    parser.add_argument("--mem-clocks", type=int, nargs="*", default=[810, 7001, 13365, 14001])
     parser.add_argument("--output", default="data/profiles.json")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
@@ -319,9 +382,12 @@ def build_output(results: list[ProfileResult], args: argparse.Namespace) -> dict
             "measurement_mode": args.measurement_mode,
             "nvidia_smi_path": args.nvidia_smi_path,
             "nvidia_smi_sudo": args.nvidia_smi_sudo,
-            "warmup_runs": args.warmup_runs,
-            "benchmark_runs": args.benchmark_runs,
             "settle_time_ms": args.settle_time_ms,
+            "gpu_warmup_s": args.gpu_warmup_s,
+            "candidate_warmup_s": args.candidate_warmup_s,
+            "benchmark_window_s": args.benchmark_window_s,
+            "allowed_core_clocks_mhz": args.core_clocks,
+            "allowed_mem_clocks_mhz": args.mem_clocks,
             "workload_count": len(results),
             "profile_style": "paper_local_waste",
             "baseline_clock_mode": "auto",
@@ -344,10 +410,13 @@ def main() -> None:
     try:
         measurement = MeasurementConfig(
             mode=args.measurement_mode,
-            warmup_runs=args.warmup_runs,
-            benchmark_runs=args.benchmark_runs,
             device=f"cuda:{args.device_index}",
             settle_time_ms=args.settle_time_ms,
+            gpu_warmup_s=args.gpu_warmup_s,
+            candidate_warmup_s=args.candidate_warmup_s,
+            benchmark_window_s=args.benchmark_window_s,
+            allowed_core_clocks_mhz=tuple(args.core_clocks) if args.core_clocks else None,
+            allowed_mem_clocks_mhz=tuple(args.mem_clocks) if args.mem_clocks else None,
         )
         specs = paper_kernel_specs(num_layers=args.num_layers)
         harness = BenchmarkHarness(

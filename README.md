@@ -2,7 +2,7 @@
 
 KernelDVFS is a deterministic, hardware-aware DVFS prototype for LLM workloads. The paper-recreation path now follows the local kernel-level waste-reduction flow from the January 13, 2026 paper "Reducing Compute Waste in LLMs through Kernel-Level DVFS":
 
-1. `example_graph.py --scenario paper_iteration` emits a GPT-style training iteration trace with 46 distinct kernel invocations and 24 repeated transformer layers.
+1. `example_graph.py --scenario paper_iteration` emits an `llm.c`-style GPT-2 forward-only inference trace with 16 distinct kernel types and 12 repeated transformer layers.
 2. `profiler.py` profiles each distinct kernel against an `auto` baseline and selects the lowest-energy clock within a tolerated slowdown percentage.
 3. `partitioner.py` and `daemon.py` remain available for later productionization work.
 4. `runtime_compare.py` runs the paper-style workload sequentially and compares `auto` clocks against per-kernel profiled clocks.

@@ -297,7 +297,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-size", type=int, default=128)
     parser.add_argument("--num-heads", type=int, default=4)
     parser.add_argument("--mlp-ratio", type=int, default=4)
-    parser.add_argument("--num-layers", type=int, default=24)
+    parser.add_argument("--num-layers", type=int, default=12)
     parser.add_argument("--graph-output", default="data/example_graph.json")
     parser.add_argument("--trace-output", default="data/example_execution_trace.json")
     parser.add_argument("--log-level", default="INFO")
@@ -309,7 +309,7 @@ def build_paper_iteration(num_layers: int) -> tuple[dict[str, Any], list[dict[st
     expanded_specs = expanded_trace_specs(num_layers=num_layers)
     graph = {
         "metadata": {
-            "graph_name": "paper_gpt3_iteration",
+            "graph_name": "llmc_gpt2_forward_inference",
             "scenario": "paper_iteration",
             "num_unique_kernels": len(unique_specs),
             "num_layers": num_layers,
@@ -356,7 +356,7 @@ def main() -> None:
             "metadata": {
                 **graph["metadata"],
                 "description": (
-                    "Paper-style GPT-3 training iteration trace with per-invocation kernels"
+                    "llm.c-style GPT-2 forward-only inference trace with per-invocation kernels"
                     if args.scenario == "paper_iteration"
                     else "Measured execution trace for the synthetic transformer block"
                 ),
