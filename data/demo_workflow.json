@@ -1,23 +1,13 @@
 {
   "metadata": {
-    "name": "demo_transformer_workflow"
+    "name": "tiny_demo_workflow"
   },
-  "prefix": [
-    "embed_add"
-  ],
+  "prefix": [],
   "layer_kernel_order": [
-    "pre_attn_ln",
     "qkv_proj",
     "attn_softmax",
-    "residual_add",
-    "mlp_expand",
-    "mlp_gelu",
-    "mlp_project",
-    "residual_add"
+    "mlp_project"
   ],
   "num_layers": 4,
-  "suffix": [
-    "final_ln",
-    "logits_proj"
-  ]
+  "suffix": []
 }

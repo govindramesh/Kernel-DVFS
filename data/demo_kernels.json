@@ -1,32 +1,8 @@
 {
   "metadata": {
-    "name": "demo_transformer_kernels"
+    "name": "tiny_demo_kernels"
   },
   "kernels": [
-    {
-      "kernel_name": "embed_add",
-      "family": "embedding_add",
-      "phase": "embedding",
-      "baseline_ms": 0.12,
-      "optimal_core_mhz": 840,
-      "optimal_mem_mhz": 9501,
-      "static_power_watts": 42.0,
-      "dynamic_power_watts": 18.0,
-      "rows": 128,
-      "cols": 512
-    },
-    {
-      "kernel_name": "pre_attn_ln",
-      "family": "layernorm",
-      "phase": "forward",
-      "baseline_ms": 0.21,
-      "optimal_core_mhz": 1260,
-      "optimal_mem_mhz": 9501,
-      "static_power_watts": 46.0,
-      "dynamic_power_watts": 22.0,
-      "rows": 128,
-      "cols": 512
-    },
     {
       "kernel_name": "qkv_proj",
       "family": "gemm",
@@ -38,7 +14,8 @@
       "dynamic_power_watts": 96.0,
       "m": 128,
       "n": 1536,
-      "k": 512
+      "k": 512,
+      "description": "Toy attention projection GEMM"
     },
     {
       "kernel_name": "attn_softmax",
@@ -50,32 +27,8 @@
       "static_power_watts": 45.0,
       "dynamic_power_watts": 20.0,
       "rows": 1024,
-      "cols": 128
-    },
-    {
-      "kernel_name": "mlp_expand",
-      "family": "gemm",
-      "phase": "forward",
-      "baseline_ms": 0.95,
-      "optimal_core_mhz": 3090,
-      "optimal_mem_mhz": 7001,
-      "static_power_watts": 60.0,
-      "dynamic_power_watts": 104.0,
-      "m": 128,
-      "n": 2048,
-      "k": 512
-    },
-    {
-      "kernel_name": "mlp_gelu",
-      "family": "gelu",
-      "phase": "forward",
-      "baseline_ms": 0.14,
-      "optimal_core_mhz": 2100,
-      "optimal_mem_mhz": 14001,
-      "static_power_watts": 44.0,
-      "dynamic_power_watts": 18.0,
-      "rows": 128,
-      "cols": 2048
+      "cols": 128,
+      "description": "Toy attention softmax"
     },
     {
       "kernel_name": "mlp_project",
@@ -88,44 +41,8 @@
       "dynamic_power_watts": 98.0,
       "m": 128,
       "n": 512,
-      "k": 2048
-    },
-    {
-      "kernel_name": "residual_add",
-      "family": "residual_add",
-      "phase": "forward",
-      "baseline_ms": 0.09,
-      "optimal_core_mhz": 2100,
-      "optimal_mem_mhz": 14001,
-      "static_power_watts": 43.0,
-      "dynamic_power_watts": 15.0,
-      "rows": 128,
-      "cols": 512
-    },
-    {
-      "kernel_name": "final_ln",
-      "family": "layernorm",
-      "phase": "output",
-      "baseline_ms": 0.22,
-      "optimal_core_mhz": 1260,
-      "optimal_mem_mhz": 9501,
-      "static_power_watts": 46.0,
-      "dynamic_power_watts": 22.0,
-      "rows": 128,
-      "cols": 512
-    },
-    {
-      "kernel_name": "logits_proj",
-      "family": "gemm",
-      "phase": "output",
-      "baseline_ms": 1.82,
-      "optimal_core_mhz": 3090,
-      "optimal_mem_mhz": 7001,
-      "static_power_watts": 61.0,
-      "dynamic_power_watts": 126.0,
-      "m": 128,
-      "n": 32000,
-      "k": 512
+      "k": 2048,
+      "description": "Toy MLP projection GEMM"
     }
   ]
 }
