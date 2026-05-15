@@ -238,15 +238,15 @@ def index_body() -> str:
         inlineResults.style.display = 'block';
         inlineResults.innerHTML = `
           <strong>Results</strong><br>
-          Profiled Kernels: ${m.profiled_kernels}<br>
-          Workflow Events: ${m.workflow_events}<br>
-          Auto Time: ${m.auto_time}<br>
-          Profiled Time: ${m.profiled_time}<br>
-          Auto Energy: ${m.auto_energy}<br>
-          Profiled Energy: ${m.profiled_energy}<br><br>
-          <a href="${payload.dashboard_href}" target="_blank" rel="noopener">Open dashboard</a> ·
-          <a href="${payload.profiles_href}" target="_blank" rel="noopener">Profiles JSON</a> ·
-          <a href="${payload.runtime_href}" target="_blank" rel="noopener">Runtime JSON</a>
+          Profiled Kernels: ${{m.profiled_kernels}}<br>
+          Workflow Events: ${{m.workflow_events}}<br>
+          Auto Time: ${{m.auto_time}}<br>
+          Profiled Time: ${{m.profiled_time}}<br>
+          Auto Energy: ${{m.auto_energy}}<br>
+          Profiled Energy: ${{m.profiled_energy}}<br><br>
+          <a href="${{payload.dashboard_href}}" target="_blank" rel="noopener">Open dashboard</a> ·
+          <a href="${{payload.profiles_href}}" target="_blank" rel="noopener">Profiles JSON</a> ·
+          <a href="${{payload.runtime_href}}" target="_blank" rel="noopener">Runtime JSON</a>
         `;
       }}
 
