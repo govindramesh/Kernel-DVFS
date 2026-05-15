@@ -6,12 +6,13 @@ import html
 import json
 import shutil
 import subprocess
+import threading
 import traceback
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from demo_pipeline import ROOT, build_pipeline_commands
 
@@ -19,6 +20,8 @@ from demo_pipeline import ROOT, build_pipeline_commands
 RUNS_DIR = ROOT / "data" / "web_runs"
 DEFAULT_KERNELS = ROOT / "data" / "demo_kernels.json"
 DEFAULT_WORKFLOW = ROOT / "data" / "demo_workflow.json"
+RUN_STATE: dict[str, dict[str, object]] = {}
+RUN_STATE_LOCK = threading.Lock()
 
 
 def page_template(body: str) -> bytes:
@@ -160,7 +163,7 @@ def index_body() -> str:
     </section>
     <section class="panel">
       <h2>Run Pipeline</h2>
-      <form method="post" action="/run" enctype="multipart/form-data" class="stack">
+      <form id="pipeline-form" method="post" action="/run" enctype="multipart/form-data" class="stack">
         <div class="controls">
           <div class="field">
             <label for="backend">Backend</label>
@@ -214,7 +217,80 @@ def index_body() -> str:
         <p class="hint">If you upload files, they override the text areas. Outputs are stored under <code>data/web_runs/...</code>.</p>
         <button class="submit" type="submit">Run</button>
       </form>
+      <div id="live-status" class="stack" style="margin-top:18px; display:none;">
+        <div class="result-card">
+          <strong>Status</strong><br>
+          <span id="status-text">Starting…</span>
+        </div>
+        <div class="result-card" id="inline-results" style="display:none;"></div>
+        <div class="result-card">
+          <strong>Logs</strong>
+          <pre id="live-logs">Waiting to start…</pre>
+        </div>
+      </div>
     </section>
+    <script>
+      const form = document.getElementById('pipeline-form');
+      const liveStatus = document.getElementById('live-status');
+      const statusText = document.getElementById('status-text');
+      const liveLogs = document.getElementById('live-logs');
+      const inlineResults = document.getElementById('inline-results');
+
+      function renderResults(payload) {{
+        if (!payload || !payload.metrics) return;
+        const m = payload.metrics;
+        inlineResults.style.display = 'block';
+        inlineResults.innerHTML = `
+          <strong>Results</strong><br>
+          Profiled Kernels: ${m.profiled_kernels}<br>
+          Workflow Events: ${m.workflow_events}<br>
+          Auto Time: ${m.auto_time}<br>
+          Profiled Time: ${m.profiled_time}<br>
+          Auto Energy: ${m.auto_energy}<br>
+          Profiled Energy: ${m.profiled_energy}<br><br>
+          <a href="${payload.dashboard_href}" target="_blank" rel="noopener">Open dashboard</a> ·
+          <a href="${payload.profiles_href}" target="_blank" rel="noopener">Profiles JSON</a> ·
+          <a href="${payload.runtime_href}" target="_blank" rel="noopener">Runtime JSON</a>
+        `;
+      }}
+
+      async function pollRun(runId) {{
+        while (true) {{
+          const response = await fetch(`/status?run_id=${{encodeURIComponent(runId)}}`, {{ cache: 'no-store' }});
+          const payload = await response.json();
+          statusText.textContent = payload.status_text;
+          liveLogs.textContent = payload.logs || 'No logs yet…';
+          if (payload.status === 'completed') {{
+            renderResults(payload);
+            break;
+          }}
+          if (payload.status === 'failed') {{
+            inlineResults.style.display = 'block';
+            inlineResults.innerHTML = '<strong>Run failed</strong>';
+            break;
+          }}
+          await new Promise(resolve => setTimeout(resolve, 900));
+        }}
+      }}
+
+      form.addEventListener('submit', async (event) => {{
+        event.preventDefault();
+        liveStatus.style.display = 'grid';
+        inlineResults.style.display = 'none';
+        statusText.textContent = 'Submitting…';
+        liveLogs.textContent = 'Starting pipeline…';
+        const formData = new FormData(form);
+        const response = await fetch('/run', {{ method: 'POST', body: formData }});
+        const payload = await response.json();
+        if (!response.ok) {{
+          statusText.textContent = 'Failed to start';
+          liveLogs.textContent = payload.error || 'Unknown error';
+          return;
+        }}
+        statusText.textContent = 'Running…';
+        await pollRun(payload.run_id);
+      }});
+    </script>
     """
 
 
@@ -291,6 +367,11 @@ class DemoHandler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self._send_html(page_template(index_body()))
             return
+        if parsed.path == "/status":
+            query = parse_qs(parsed.query)
+            run_id = query.get("run_id", [""])[0]
+            self._send_json(self._status_payload(run_id))
+            return
         if parsed.path.startswith("/artifacts/"):
             relative = parsed.path.removeprefix("/artifacts/")
             target = RUNS_DIR / relative
@@ -344,28 +425,12 @@ class DemoHandler(BaseHTTPRequestHandler):
                 nvidia_smi_sudo=True,
                 tolerated_slowdown_pct=tolerated_slowdown_pct,
             )
-            logs = self._run_commands_with_logs(commands)
-
-            profiles_payload = json.loads(Path(profiles_output).read_text(encoding="utf-8"))
-            runtime_payload = json.loads(Path(runtime_output).read_text(encoding="utf-8"))
-            metrics = {
-                "profiled_kernels": str(len(profiles_payload.get("profiles", {}))),
-                "workflow_events": str(len(runtime_payload.get("events", []))),
-                "auto_time": self._format_metric(runtime_payload.get("auto", {}).get("time_to_complete_ms"), " ms"),
-                "profiled_time": self._format_metric(runtime_payload.get("profiled", {}).get("time_to_complete_ms"), " ms"),
-                "auto_energy": self._format_metric(runtime_payload.get("auto", {}).get("total_energy_mj"), " mJ"),
-                "profiled_energy": self._format_metric(runtime_payload.get("profiled", {}).get("total_energy_mj"), " mJ"),
-            }
-
-            dashboard_href = f"/artifacts/{run_id}/dashboard.html"
-            profiles_href = f"/artifacts/{run_id}/profiles.json"
-            runtime_href = f"/artifacts/{run_id}/runtime.json"
-            self._send_html(
-                page_template(result_body(run_id, dashboard_href, profiles_href, runtime_href, metrics, logs))
-            )
+            self._initialize_run_state(run_id, run_dir, commands)
+            threading.Thread(target=self._execute_run, args=(run_id,), daemon=True).start()
+            self._send_json({"run_id": run_id, "status": "started"})
         except Exception as exc:
             details = "".join(traceback.format_exception(exc))
-            self._send_html(page_template(error_body(str(exc), details)), status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            self._send_json({"error": f"{exc}\n\n{details}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _write_uploaded_or_text(self, form: cgi.FieldStorage, file_field: str, text_field: str, output_path: Path) -> None:
         upload = form[file_field] if file_field in form else None
@@ -387,25 +452,91 @@ class DemoHandler(BaseHTTPRequestHandler):
             return str(value[0])
         return default if value is None else str(value)
 
-    def _run_commands_with_logs(self, commands: dict[str, list[str]]) -> str:
-        log_chunks: list[str] = []
-        for step_name in ("profiler", "runtime", "dashboard"):
-            cmd = commands[step_name]
-            completed = subprocess.run(
-                cmd,
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            log_chunks.append(f"$ {' '.join(cmd)}")
-            if completed.stdout.strip():
-                log_chunks.append(completed.stdout.strip())
-            if completed.stderr.strip():
-                log_chunks.append(completed.stderr.strip())
-            if completed.returncode != 0:
-                raise RuntimeError("\n\n".join(log_chunks))
-        return "\n\n".join(log_chunks)
+    def _initialize_run_state(self, run_id: str, run_dir: Path, commands: dict[str, list[str]]) -> None:
+        with RUN_STATE_LOCK:
+            RUN_STATE[run_id] = {
+                "status": "running",
+                "status_text": "Queued",
+                "logs": "",
+                "run_dir": run_dir,
+                "commands": commands,
+                "metrics": None,
+                "dashboard_href": f"/artifacts/{run_id}/dashboard.html",
+                "profiles_href": f"/artifacts/{run_id}/profiles.json",
+                "runtime_href": f"/artifacts/{run_id}/runtime.json",
+            }
+
+    def _append_log(self, run_id: str, text: str) -> None:
+        with RUN_STATE_LOCK:
+            RUN_STATE[run_id]["logs"] = str(RUN_STATE[run_id]["logs"]) + text
+
+    def _set_status(self, run_id: str, status: str, status_text: str) -> None:
+        with RUN_STATE_LOCK:
+            RUN_STATE[run_id]["status"] = status
+            RUN_STATE[run_id]["status_text"] = status_text
+
+    def _execute_run(self, run_id: str) -> None:
+        try:
+            with RUN_STATE_LOCK:
+                state = RUN_STATE[run_id]
+                commands = dict(state["commands"])
+                run_dir = Path(state["run_dir"])
+            for step_name, status_text in (
+                ("profiler", "Running profiler…"),
+                ("runtime", "Aggregating workload…"),
+                ("dashboard", "Building dashboard…"),
+            ):
+                self._set_status(run_id, "running", status_text)
+                cmd = commands[step_name]
+                self._append_log(run_id, f"$ {' '.join(cmd)}\n")
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=ROOT,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+                assert process.stdout is not None
+                for line in process.stdout:
+                    self._append_log(run_id, line)
+                returncode = process.wait()
+                self._append_log(run_id, "\n")
+                if returncode != 0:
+                    self._set_status(run_id, "failed", f"{step_name} failed")
+                    return
+
+            profiles_payload = json.loads((run_dir / "profiles.json").read_text(encoding="utf-8"))
+            runtime_payload = json.loads((run_dir / "runtime.json").read_text(encoding="utf-8"))
+            metrics = {
+                "profiled_kernels": str(len(profiles_payload.get("profiles", {}))),
+                "workflow_events": str(len(runtime_payload.get("events", []))),
+                "auto_time": self._format_metric(runtime_payload.get("auto", {}).get("time_to_complete_ms"), " ms"),
+                "profiled_time": self._format_metric(runtime_payload.get("profiled", {}).get("time_to_complete_ms"), " ms"),
+                "auto_energy": self._format_metric(runtime_payload.get("auto", {}).get("total_energy_mj"), " mJ"),
+                "profiled_energy": self._format_metric(runtime_payload.get("profiled", {}).get("total_energy_mj"), " mJ"),
+            }
+            with RUN_STATE_LOCK:
+                RUN_STATE[run_id]["metrics"] = metrics
+            self._set_status(run_id, "completed", "Complete")
+        except Exception as exc:
+            self._append_log(run_id, "\n" + "".join(traceback.format_exception(exc)))
+            self._set_status(run_id, "failed", "Run failed")
+
+    def _status_payload(self, run_id: str) -> dict[str, object]:
+        with RUN_STATE_LOCK:
+            state = RUN_STATE.get(run_id)
+            if state is None:
+                return {"status": "missing", "status_text": "Run not found", "logs": ""}
+            return {
+                "status": state["status"],
+                "status_text": state["status_text"],
+                "logs": state["logs"],
+                "metrics": state["metrics"],
+                "dashboard_href": state["dashboard_href"],
+                "profiles_href": state["profiles_href"],
+                "runtime_href": state["runtime_href"],
+            }
 
     def _format_metric(self, value: object, suffix: str) -> str:
         if value is None:
@@ -418,6 +549,14 @@ class DemoHandler(BaseHTTPRequestHandler):
     def _send_html(self, body: bytes, status: HTTPStatus = HTTPStatus.OK) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_json(self, payload: dict[str, object], status: HTTPStatus = HTTPStatus.OK) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
