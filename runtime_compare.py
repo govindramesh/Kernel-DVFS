@@ -5,6 +5,12 @@ from typing import Any
 
 from kerneldvfs.models import ProfileResult, read_json, write_json
 from kerneldvfs.paper_recreation import PaperKernelSpec, expanded_trace_specs, paper_kernel_specs
+from kerneldvfs.workload_loader import (
+    execution_graph_from_workflow,
+    expanded_trace_from_workflow,
+    load_kernel_specs_file,
+    load_workflow_file,
+)
 
 
 def load_profiles(path: str) -> dict[str, ProfileResult]:
@@ -25,12 +31,13 @@ def aggregate_events(
     profiles: dict[str, ProfileResult],
     num_layers: int,
     iterations: int,
+    execution_graph: dict[str, Any],
 ) -> dict[str, Any]:
-    unique_specs = paper_kernel_specs(num_layers=num_layers)
-    prefix, repeated, suffix = identify_trace_regions(unique_specs, num_layers=num_layers)
-    prefix_names = {spec.kernel_name for spec in prefix}
-    repeated_names = {spec.kernel_name for spec in repeated}
-    suffix_names = {spec.kernel_name for spec in suffix}
+    unique_specs: list[PaperKernelSpec] = []
+    prefix_names = set(execution_graph.get("prefix", []))
+    repeated_order = list(execution_graph.get("layer_kernel_order", []))
+    repeated_names = set(repeated_order)
+    suffix_names = set(execution_graph.get("suffix", []))
 
     events: list[dict[str, Any]] = []
     layers: list[dict[str, Any]] = [
@@ -57,7 +64,7 @@ def aggregate_events(
             layer_index: int | None = None
             region = "prefix"
             if spec.kernel_name in repeated_names:
-                layer_index = repeated_cursor // len(repeated)
+                layer_index = repeated_cursor // max(len(repeated_order), 1)
                 repeated_cursor += 1
                 region = "layer"
             elif spec.kernel_name in suffix_names:
@@ -116,12 +123,7 @@ def aggregate_events(
         )
 
     return {
-        "execution_graph": {
-            "prefix": [spec.kernel_name for spec in prefix],
-            "layer_kernel_order": [spec.kernel_name for spec in repeated],
-            "suffix": [spec.kernel_name for spec in suffix],
-            "num_layers": num_layers,
-        },
+        "execution_graph": execution_graph,
         "events": events,
         "layers": layers,
         "auto": {
@@ -151,6 +153,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profiles", default="data/profiles.json")
     parser.add_argument("--num-layers", type=int, default=12)
     parser.add_argument("--iterations", type=int, default=1)
+    parser.add_argument("--kernel-defs", default=None, help="Optional JSON file describing custom kernel definitions")
+    parser.add_argument("--workflow", default=None, help="Optional JSON file describing workflow order")
     parser.add_argument("--output", default="data/runtime_comparison.json")
     return parser.parse_args()
 
@@ -158,17 +162,48 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     profiles = load_profiles(args.profiles)
-    trace_specs = expanded_trace_specs(num_layers=args.num_layers)
+    if args.kernel_defs and args.workflow:
+        specs = load_kernel_specs_file(args.kernel_defs)
+        workflow = load_workflow_file(args.workflow)
+        trace_specs = expanded_trace_from_workflow(specs=specs, workflow=workflow)
+        execution_graph = execution_graph_from_workflow(workflow)
+        num_layers = int(execution_graph.get("num_layers", 1))
+    else:
+        trace_specs = expanded_trace_specs(num_layers=args.num_layers)
+        execution_graph = {
+            "prefix": ["k00_tokpos_embedding_add"],
+            "layer_kernel_order": [
+                "k01_block_pre_attn_layernorm",
+                "k02_block_qkv_projection",
+                "k03_block_qkv_permute",
+                "k04_block_attn_scores",
+                "k05_block_attn_softmax",
+                "k06_block_attn_context",
+                "k07_block_attn_output_projection",
+                "k08_block_attn_residual_add",
+                "k09_block_pre_mlp_layernorm",
+                "k10_block_mlp_expand",
+                "k11_block_mlp_gelu",
+                "k12_block_mlp_project",
+                "k13_block_mlp_residual_add",
+            ],
+            "suffix": ["k14_final_layernorm", "k15_logits_projection"],
+            "num_layers": args.num_layers,
+        }
+        num_layers = args.num_layers
     payload = aggregate_events(
         trace_specs=trace_specs,
         profiles=profiles,
-        num_layers=args.num_layers,
+        num_layers=num_layers,
         iterations=args.iterations,
+        execution_graph=execution_graph,
     )
     payload["metadata"] = {
         "profiles_path": args.profiles,
-        "num_layers": args.num_layers,
+        "num_layers": num_layers,
         "iterations": args.iterations,
+        "kernel_defs_path": args.kernel_defs,
+        "workflow_path": args.workflow,
         "comparison_style": "paper_offline_aggregation",
     }
     write_json(args.output, payload)

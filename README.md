@@ -5,7 +5,7 @@ KernelDVFS is a deterministic, hardware-aware DVFS prototype for LLM workloads. 
 1. `example_graph.py --scenario paper_iteration` emits an `llm.c`-style GPT-2 forward-only inference trace with 16 distinct kernel types and 12 repeated transformer layers.
 2. `profiler.py` profiles each distinct kernel against an `auto` baseline and selects the lowest-energy clock within a tolerated slowdown percentage.
 3. `partitioner.py` and `daemon.py` remain available for later productionization work.
-4. `runtime_compare.py` runs the paper-style workload sequentially and compares `auto` clocks against per-kernel profiled clocks.
+4. `runtime_compare.py` aggregates isolated kernel measurements over the workload order to reproduce the paper-style `auto` vs profiled comparison.
 
 The project is designed to run in two modes:
 
@@ -24,6 +24,8 @@ The project is designed to run in two modes:
 - `kerneldvfs/paper_recreation.py`: Paper kernel catalog, paper clock domains, and benchmark families.
 - `runtime_compare.py`: Sequential workload runner for `auto` vs profiled-clock comparison, including measured clock transition latency.
 - `dashboard.py`: Standalone HTML dashboard generator for per-kernel profiling and runtime comparison outputs.
+- `demo_pipeline.py`: One-shot custom demo pipeline that profiles a kernel file, aggregates a workflow file, and generates the dashboard.
+- `demo_web.py`: Local webpage demo for uploading or editing kernel/workflow JSON and running the full pipeline.
 - `data/execution_trace.json`: Sample transformer-layer execution trace.
 
 ## Quickstart
@@ -37,26 +39,81 @@ python3 daemon.py --schedule data/superblock_schedule.json --backend mock
 
 ## Real Runtime Comparison
 
-Once you have a real profile file, you can compare the sequential workload under `auto` clocks and per-kernel profiled clocks:
+Once you have a real profile file, you can aggregate the workload under `auto` and per-kernel profiled clocks:
 
 ```bash
 python3 profiler.py --backend real --measurement-mode real --device-index 0 --tolerated-slowdown-pct 0.0 --output data/profiles.json
-python3 runtime_compare.py --backend real --device-index 0 --device cuda:0 --profiles data/profiles.json --mode both --output data/runtime_comparison.json
+python3 runtime_compare.py --profiles data/profiles.json --output data/runtime_comparison.json
 python3 dashboard.py --profiles data/profiles.json --runtime-compare data/runtime_comparison.json --output data/dashboard.html
 ```
 
 `runtime_compare.py`:
 
-- runs the paper-style kernel sequence sequentially
-- uses `auto` clocks for one run
-- uses the profiled target clocks before every kernel event for the second run
-- records total workload wall time, summed kernel runtime, estimated energy, and observed clock-transition latency
+- expands the workload execution order
+- sums measured per-kernel `auto` runtime and energy over that order
+- sums measured per-kernel profiled runtime and energy over that order
+- reports per-layer and whole-workload totals without replaying live clock switches
 
 `dashboard.py`:
 
 - builds a standalone local HTML page
 - shows a top kernel table with auto vs ideal runtime and energy
-- shows the bottom whole-workload comparison from `runtime_compare.py`
+- shows the execution graph plus per-layer and whole-workload comparison from `runtime_compare.py`
+
+## Custom Demo
+
+The simplest end-to-end demo takes:
+
+- a kernel definition file such as `data/demo_kernels.json`
+- a workflow file such as `data/demo_workflow.json`
+
+Then runs:
+
+```bash
+python3 demo_pipeline.py
+```
+
+The script will prompt for the two files if you do not pass them explicitly. You can also run it non-interactively:
+
+```bash
+python3 demo_pipeline.py \
+  --kernel-defs data/demo_kernels.json \
+  --workflow data/demo_workflow.json \
+  --backend mock \
+  --measurement-mode mock \
+  --profiles-output data/demo_profiles.json \
+  --runtime-output data/demo_runtime.json \
+  --dashboard-output data/demo_dashboard.html
+```
+
+Workflow file shape:
+
+- `prefix`: kernels that run once before repeated layers
+- `layer_kernel_order`: kernels that run in-order inside each layer
+- `num_layers`: how many times to repeat that middle sequence
+- `suffix`: kernels that run once after the repeated layers
+
+## Web Demo
+
+To run the same custom demo flow as a webpage:
+
+```bash
+python3 demo_web.py --host 127.0.0.1 --port 8000
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+The page lets you:
+
+- paste or upload a kernel definitions JSON file
+- paste or upload a workflow JSON file
+- choose mock vs real profiling
+- run profiling, aggregation, and dashboard generation in one click
+- open the generated dashboard and JSON artifacts in the browser
 
 ## Dependency Notes
 
@@ -122,7 +179,7 @@ python3 example_graph.py --backend triton --device cuda --dtype float16
 Example GPU run:
 
 ```bash
-python3 profiler.py --backend real --measurement-mode real --device-index 0 --warmup-runs 5 --benchmark-runs 25 --output data/profiles.json
+python3 profiler.py --backend real --measurement-mode real --device-index 0 --output data/profiles.json
 ```
 
 If the environment cannot satisfy real profiling requirements, `--measurement-mode auto` will fall back to mock profiling while keeping the output format unchanged.
@@ -142,5 +199,5 @@ export KERNELDVFS_NVIDIA_SMI=/usr/bin/nvidia-smi
 You can also pass those directly as CLI flags instead:
 
 ```bash
-python3 profiler.py --backend real --measurement-mode real --nvidia-smi-sudo --nvidia-smi-path /usr/bin/nvidia-smi --device-index 0 --warmup-runs 5 --benchmark-runs 25 --output data/profiles.json
+python3 profiler.py --backend real --measurement-mode real --nvidia-smi-sudo --nvidia-smi-path /usr/bin/nvidia-smi --device-index 0 --output data/profiles.json
 ```

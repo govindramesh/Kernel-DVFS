@@ -16,6 +16,7 @@ from kerneldvfs.paper_recreation import (
     run_family_kernel,
     spec_shapes,
 )
+from kerneldvfs.workload_loader import load_kernel_specs_file
 
 LOGGER = logging.getLogger(__name__)
 CONTROLLER_LOGGER = logging.getLogger("kerneldvfs.nvml_controller")
@@ -71,8 +72,7 @@ class RealMeasurementContext:
     energy_source: str
 
 
-def default_workloads(num_layers: int) -> list[KernelWorkload]:
-    specs = paper_kernel_specs(num_layers=num_layers)
+def workloads_from_specs(specs: list[PaperKernelSpec]) -> list[KernelWorkload]:
     return [
         KernelWorkload(
             kernel_name=spec.kernel_name,
@@ -85,6 +85,10 @@ def default_workloads(num_layers: int) -> list[KernelWorkload]:
         )
         for spec in specs
     ]
+
+
+def default_workloads(num_layers: int) -> list[KernelWorkload]:
+    return workloads_from_specs(paper_kernel_specs(num_layers=num_layers))
 
 
 class BenchmarkHarness:
@@ -387,6 +391,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--benchmark-window-s", type=float, default=5.0)
     parser.add_argument("--core-clocks", type=int, nargs="*", default=[2100, 2400, 2700, 3000, 3090])
     parser.add_argument("--mem-clocks", type=int, nargs="*", default=[810, 7001, 13365, 14001])
+    parser.add_argument("--kernel-defs", default=None, help="Optional JSON file describing custom kernel definitions")
     parser.add_argument("--output", default="data/profiles.json")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
@@ -409,6 +414,7 @@ def build_output(results: list[ProfileResult], args: argparse.Namespace) -> dict
             "benchmark_window_s": args.benchmark_window_s,
             "allowed_core_clocks_mhz": args.core_clocks,
             "allowed_mem_clocks_mhz": args.mem_clocks,
+            "kernel_defs_path": args.kernel_defs,
             "workload_count": len(results),
             "profile_style": "paper_local_waste",
             "baseline_clock_mode": "auto",
@@ -440,14 +446,14 @@ def main() -> None:
             allowed_core_clocks_mhz=tuple(args.core_clocks) if args.core_clocks else None,
             allowed_mem_clocks_mhz=tuple(args.mem_clocks) if args.mem_clocks else None,
         )
-        specs = paper_kernel_specs(num_layers=args.num_layers)
+        specs = load_kernel_specs_file(args.kernel_defs) if args.kernel_defs else paper_kernel_specs(num_layers=args.num_layers)
         harness = BenchmarkHarness(
             controller=controller,
             tolerated_slowdown_pct=args.tolerated_slowdown_pct,
             measurement=measurement,
             specs=specs,
         )
-        results = harness.profile(default_workloads(num_layers=args.num_layers))
+        results = harness.profile(workloads_from_specs(specs))
         payload = build_output(results, args)
         write_json(args.output, payload)
         LOGGER.info("Wrote profiles to %s", args.output)
