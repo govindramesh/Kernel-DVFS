@@ -159,7 +159,7 @@ def index_body() -> str:
     return f"""
     <section class="hero">
       <h1>KernelDVFS Workbench</h1>
-      <p>Provide kernel code and workflow JSON, then run real profiling, workload aggregation, and dashboard generation from one page.</p>
+      <p>Provide a kernel list and workflow JSON, then run real profiling, workload aggregation, and dashboard generation from one page.</p>
     </section>
     <section class="panel">
       <h2>Run Pipeline</h2>
@@ -198,7 +198,7 @@ def index_body() -> str:
           </div>
         </div>
 
-        <p class="hint">Each kernel must include <code>kernel_name</code> and <code>source_code</code>. The page always runs the real profiling path and sends process logs to the terminal. If you upload files, they override the text areas. Outputs are stored under <code>data/web_runs/...</code>.</p>
+        <p class="hint">Each kernel entry must include <code>kernel_name</code>. The source lives in repo CUDA files and the page always runs the real profiling path, sending process logs to the terminal. If you upload files, they override the text areas. Outputs are stored under <code>data/web_runs/...</code>.</p>
         <button class="submit" type="submit">Run</button>
       </form>
       <div id="live-status" class="stack" style="margin-top:18px; display:none;">

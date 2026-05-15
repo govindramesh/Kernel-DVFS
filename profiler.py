@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from kerneldvfs.models import ClockSetting, ProfileResult, write_json
 from kerneldvfs.nvml_controller import BaseClockController, create_clock_controller
+from kerneldvfs.custom_cuda_kernels import custom_cuda_category, get_custom_cuda_kernel, has_custom_cuda_kernel, load_custom_cuda_extension
 from kerneldvfs.paper_recreation import (
     PaperKernelSpec,
     build_family_inputs,
@@ -68,6 +69,7 @@ class MeasurementConfig:
 @dataclass
 class RealMeasurementContext:
     torch: Any
+    extension: Any
     inputs: dict[str, Any]
     runners: dict[str, Callable[[Any, tuple[Any, ...]], Any]]
     energy_source: str
@@ -77,7 +79,7 @@ def workloads_from_specs(specs: list[PaperKernelSpec]) -> list[KernelWorkload]:
     return [
         KernelWorkload(
             kernel_name=spec.kernel_name,
-            category=family_category(spec.family) if spec.family != "custom" else "custom",
+            category=custom_cuda_category(spec.kernel_name) if has_custom_cuda_kernel(spec.kernel_name) else family_category(spec.family),
             baseline_ms=spec.baseline_ms,
             optimal_core_mhz=spec.optimal_core_mhz,
             optimal_mem_mhz=spec.optimal_mem_mhz,
@@ -136,7 +138,9 @@ class BenchmarkHarness:
             raise RuntimeError("torch.cuda.is_available() is false")
 
         torch.cuda.set_device(self.measurement.device)
-        dtype = torch.float16
+        uses_custom_cuda = any(has_custom_cuda_kernel(spec.kernel_name) for spec in self.specs.values())
+        dtype = torch.float32 if uses_custom_cuda else torch.float16
+        extension = load_custom_cuda_extension(torch) if uses_custom_cuda else None
         inputs: dict[str, Any] = {}
         runners: dict[str, Callable[[Any, tuple[Any, ...]], Any]] = {}
         for spec in self.specs.values():
@@ -145,10 +149,12 @@ class BenchmarkHarness:
                 torch_module=torch,
                 device=self.measurement.device,
                 dtype=dtype,
+                extension=extension,
             )
         energy_source = "nvml_total_energy" if self.controller.get_total_energy_consumption_mj() is not None else "nvml_power_samples"
         return RealMeasurementContext(
             torch=torch,
+            extension=extension,
             inputs=inputs,
             runners=runners,
             energy_source=energy_source,
@@ -161,24 +167,12 @@ class BenchmarkHarness:
         torch_module: Any,
         device: str,
         dtype: Any,
+        extension: Any,
     ) -> tuple[Any, Callable[[Any, tuple[Any, ...]], Any]]:
-        if spec.source_code:
-            namespace: dict[str, Any] = {"torch": torch_module}
-            exec(spec.source_code, namespace)
-            build_inputs = namespace.get("build_inputs")
-            run_kernel = namespace.get("run_kernel")
-            if not callable(build_inputs) or not callable(run_kernel):
-                raise RuntimeError(
-                    f"Custom kernel '{spec.kernel_name}' must define build_inputs(torch, device, dtype) and run_kernel(torch, *inputs)"
-                )
-            inputs = build_inputs(torch_module, device, dtype)
-            if not isinstance(inputs, tuple):
-                inputs = (inputs,)
-
-            def custom_runner(runtime_torch: Any, args: tuple[Any, ...], fn: Callable[..., Any] = run_kernel) -> Any:
-                return fn(runtime_torch, *args)
-
-            return inputs, custom_runner
+        if has_custom_cuda_kernel(spec.kernel_name):
+            kernel = get_custom_cuda_kernel(spec.kernel_name)
+            inputs = kernel.build_inputs(torch_module, device, dtype)
+            return inputs, lambda _runtime_torch, args, ext=extension, fn=kernel.run: fn(ext, args)
 
         inputs = build_family_inputs(spec, torch=torch_module, device=device, dtype=dtype)
 
@@ -258,7 +252,7 @@ class BenchmarkHarness:
                     "family": spec.family,
                     "phase": spec.phase,
                     "paper_kernel_description": spec.description,
-                    "uses_custom_code": bool(spec.source_code),
+                    "uses_custom_code": has_custom_cuda_kernel(spec.kernel_name),
                     "repeat_count": spec.repeat_count,
                     "shapes": spec_shapes(spec),
                     "tolerated_slowdown_pct": self.tolerated_slowdown_pct,
@@ -491,8 +485,6 @@ def main() -> None:
         if args.kernel_defs:
             if args.backend != "real" or args.measurement_mode != "real":
                 raise RuntimeError("Custom kernel definitions are supported only with --backend real --measurement-mode real")
-            if any(not spec.source_code for spec in specs):
-                raise RuntimeError("Custom kernel definitions must provide source_code for every kernel")
         harness = BenchmarkHarness(
             controller=controller,
             tolerated_slowdown_pct=args.tolerated_slowdown_pct,

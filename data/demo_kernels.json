@@ -1,16 +1,13 @@
 {
   "kernels": [
     {
-      "kernel_name": "qkv_proj",
-      "source_code": "def build_inputs(torch, device, dtype):\n    left = torch.randn((128, 512), device=device, dtype=dtype)\n    right = torch.randn((512, 1536), device=device, dtype=dtype)\n    return left, right\n\ndef run_kernel(torch, left, right):\n    return torch.matmul(left, right)\n"
+      "kernel_name": "rmsnorm"
     },
     {
-      "kernel_name": "attn_softmax",
-      "source_code": "def build_inputs(torch, device, dtype):\n    scores = torch.randn((1024, 128), device=device, dtype=dtype)\n    return (scores,)\n\ndef run_kernel(torch, scores):\n    return torch.softmax(scores, dim=-1)\n"
+      "kernel_name": "softmax"
     },
     {
-      "kernel_name": "mlp_project",
-      "source_code": "def build_inputs(torch, device, dtype):\n    left = torch.randn((128, 2048), device=device, dtype=dtype)\n    right = torch.randn((2048, 512), device=device, dtype=dtype)\n    return left, right\n\ndef run_kernel(torch, left, right):\n    return torch.matmul(left, right)\n"
+      "kernel_name": "silu"
     }
   ]
 }

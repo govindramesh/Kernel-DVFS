@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from .custom_cuda_kernels import custom_cuda_category, get_custom_cuda_kernel, has_custom_cuda_kernel
 from .models import read_json
 from .paper_recreation import PaperKernelSpec
 
@@ -11,12 +12,16 @@ def load_kernel_specs_file(path: str) -> list[PaperKernelSpec]:
     payload = read_json(path)
     specs: list[PaperKernelSpec] = []
     for item in payload["kernels"]:
-        if "kernel_name" not in item or "source_code" not in item:
-            raise ValueError("Each custom kernel must include 'kernel_name' and 'source_code'")
+        if "kernel_name" not in item:
+            raise ValueError("Each custom kernel must include 'kernel_name'")
+        kernel_name = str(item["kernel_name"])
+        if not has_custom_cuda_kernel(kernel_name):
+            raise ValueError(f"Unknown custom CUDA kernel '{kernel_name}'")
+        kernel = get_custom_cuda_kernel(kernel_name)
         specs.append(
             PaperKernelSpec(
-                kernel_name=item["kernel_name"],
-                family=item.get("family", "custom"),
+                kernel_name=kernel_name,
+                family=custom_cuda_category(kernel_name),
                 phase=item.get("phase", "custom"),
                 baseline_ms=0.0,
                 optimal_core_mhz=0,
@@ -24,8 +29,7 @@ def load_kernel_specs_file(path: str) -> list[PaperKernelSpec]:
                 static_power_watts=0.0,
                 dynamic_power_watts=0.0,
                 repeat_count=int(item.get("repeat_count", 1)),
-                description=item.get("description", item["kernel_name"]),
-                source_code=str(item["source_code"]),
+                description=item.get("description", kernel.description),
             )
         )
     return specs
