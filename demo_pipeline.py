@@ -106,7 +106,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dashboard-output", default="data/demo_dashboard.html")
     parser.add_argument("--num-layers", type=int, default=None, help="Override workflow num_layers if desired")
     parser.add_argument("--device-index", type=int, default=0)
-    parser.add_argument("--nvidia-smi-sudo", action="store_true")
+    parser.add_argument("--nvidia-smi-sudo", action="store_true", default=True)
+    parser.add_argument("--no-nvidia-smi-sudo", dest="nvidia_smi_sudo", action="store_false")
     parser.add_argument("--tolerated-slowdown-pct", type=float, default=0.0)
     return parser.parse_args()
 

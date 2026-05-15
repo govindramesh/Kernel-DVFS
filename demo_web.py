@@ -5,6 +5,7 @@ import cgi
 import html
 import json
 import shutil
+import subprocess
 import traceback
 from datetime import datetime
 from http import HTTPStatus
@@ -12,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from demo_pipeline import ROOT, run_pipeline
+from demo_pipeline import ROOT, build_pipeline_commands
 
 
 RUNS_DIR = ROOT / "data" / "web_runs"
@@ -26,7 +27,7 @@ def page_template(body: str) -> bytes:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>KernelDVFS Web Demo</title>
+  <title>KernelDVFS Workbench</title>
   <style>
     :root {{
       --bg: #f4efe7;
@@ -100,6 +101,29 @@ def page_template(body: str) -> bytes:
       border: 1px solid var(--line);
       background: rgba(255,255,255,0.72);
     }}
+    .metrics {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }}
+    .metric {{
+      padding: 16px 18px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.72);
+    }}
+    .metric-label {{
+      display: block;
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 6px;
+    }}
+    .metric-value {{
+      display: block;
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: var(--ink);
+    }}
     a {{ color: var(--accent); }}
     pre {{
       padding: 14px 16px;
@@ -131,11 +155,11 @@ def index_body() -> str:
     workflow_text = DEFAULT_WORKFLOW.read_text(encoding="utf-8")
     return f"""
     <section class="hero">
-      <h1>KernelDVFS Web Demo</h1>
-      <p>Upload or edit a kernel-definition file and a workflow file, then run the full profiling → aggregation → dashboard pipeline from your browser.</p>
+      <h1>KernelDVFS Workbench</h1>
+      <p>Upload or edit kernel definitions and workflow JSON, then run profiling, aggregation, and dashboard generation from one page.</p>
     </section>
     <section class="panel">
-      <h2>Run Demo</h2>
+      <h2>Run Pipeline</h2>
       <form method="post" action="/run" enctype="multipart/form-data" class="stack">
         <div class="controls">
           <div class="field">
@@ -187,20 +211,39 @@ def index_body() -> str:
           </div>
         </div>
 
-        <p class="hint">If you upload files, they override the text areas. The generated dashboard and JSON artifacts will be stored under <code>data/web_runs/...</code>.</p>
-        <button class="submit" type="submit">Run Pipeline</button>
+        <p class="hint">If you upload files, they override the text areas. Outputs are stored under <code>data/web_runs/...</code>.</p>
+        <button class="submit" type="submit">Run</button>
       </form>
     </section>
     """
 
 
-def result_body(run_id: str, dashboard_href: str, profiles_href: str, runtime_href: str) -> str:
+def result_body(
+    run_id: str,
+    dashboard_href: str,
+    profiles_href: str,
+    runtime_href: str,
+    metrics: dict[str, str],
+    logs: str,
+) -> str:
     return f"""
     <section class="hero">
-      <h1>Pipeline Complete</h1>
+      <h1>Run Complete</h1>
       <p>The profiling, aggregation, and dashboard generation steps finished for run <code>{html.escape(run_id)}</code>.</p>
     </section>
     <section class="panel">
+      <h2>Results</h2>
+      <div class="metrics">
+        <div class="metric"><span class="metric-label">Profiled Kernels</span><span class="metric-value">{metrics["profiled_kernels"]}</span></div>
+        <div class="metric"><span class="metric-label">Workflow Events</span><span class="metric-value">{metrics["workflow_events"]}</span></div>
+        <div class="metric"><span class="metric-label">Auto Time</span><span class="metric-value">{metrics["auto_time"]}</span></div>
+        <div class="metric"><span class="metric-label">Profiled Time</span><span class="metric-value">{metrics["profiled_time"]}</span></div>
+        <div class="metric"><span class="metric-label">Auto Energy</span><span class="metric-value">{metrics["auto_energy"]}</span></div>
+        <div class="metric"><span class="metric-label">Profiled Energy</span><span class="metric-value">{metrics["profiled_energy"]}</span></div>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Artifacts</h2>
       <div class="stack">
         <div class="result-card">
           <strong>Dashboard</strong><br>
@@ -215,9 +258,13 @@ def result_body(run_id: str, dashboard_href: str, profiles_href: str, runtime_hr
           <a href="{runtime_href}" target="_blank" rel="noopener">Open aggregated runtime results</a>
         </div>
         <div class="result-card">
-          <a href="/">Run another demo</a>
+          <a href="/">Start another run</a>
         </div>
       </div>
+    </section>
+    <section class="panel">
+      <h2>Logs</h2>
+      <pre>{html.escape(logs)}</pre>
     </section>
     """
 
@@ -231,7 +278,7 @@ def error_body(message: str, details: str) -> str:
     <section class="panel">
       <h2>Details</h2>
       <pre>{html.escape(details)}</pre>
-      <p><a href="/">Back to demo</a></p>
+      <p><a href="/">Back to workbench</a></p>
     </section>
     """
 
@@ -284,7 +331,7 @@ class DemoHandler(BaseHTTPRequestHandler):
             num_layers = int(num_layers_raw) if num_layers_raw else None
             tolerated_slowdown_pct = float(self._field_value(form, "tolerated_slowdown_pct", "0.0"))
 
-            run_pipeline(
+            commands = build_pipeline_commands(
                 kernel_defs=str(kernel_defs_path),
                 workflow=str(workflow_path),
                 backend=backend,
@@ -294,14 +341,28 @@ class DemoHandler(BaseHTTPRequestHandler):
                 dashboard_output=dashboard_output,
                 num_layers=num_layers,
                 device_index=0,
-                nvidia_smi_sudo=False,
+                nvidia_smi_sudo=True,
                 tolerated_slowdown_pct=tolerated_slowdown_pct,
             )
+            logs = self._run_commands_with_logs(commands)
+
+            profiles_payload = json.loads(Path(profiles_output).read_text(encoding="utf-8"))
+            runtime_payload = json.loads(Path(runtime_output).read_text(encoding="utf-8"))
+            metrics = {
+                "profiled_kernels": str(len(profiles_payload.get("profiles", {}))),
+                "workflow_events": str(len(runtime_payload.get("events", []))),
+                "auto_time": self._format_metric(runtime_payload.get("auto", {}).get("time_to_complete_ms"), " ms"),
+                "profiled_time": self._format_metric(runtime_payload.get("profiled", {}).get("time_to_complete_ms"), " ms"),
+                "auto_energy": self._format_metric(runtime_payload.get("auto", {}).get("total_energy_mj"), " mJ"),
+                "profiled_energy": self._format_metric(runtime_payload.get("profiled", {}).get("total_energy_mj"), " mJ"),
+            }
 
             dashboard_href = f"/artifacts/{run_id}/dashboard.html"
             profiles_href = f"/artifacts/{run_id}/profiles.json"
             runtime_href = f"/artifacts/{run_id}/runtime.json"
-            self._send_html(page_template(result_body(run_id, dashboard_href, profiles_href, runtime_href)))
+            self._send_html(
+                page_template(result_body(run_id, dashboard_href, profiles_href, runtime_href, metrics, logs))
+            )
         except Exception as exc:
             details = "".join(traceback.format_exception(exc))
             self._send_html(page_template(error_body(str(exc), details)), status=HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -325,6 +386,34 @@ class DemoHandler(BaseHTTPRequestHandler):
         if isinstance(value, list):
             return str(value[0])
         return default if value is None else str(value)
+
+    def _run_commands_with_logs(self, commands: dict[str, list[str]]) -> str:
+        log_chunks: list[str] = []
+        for step_name in ("profiler", "runtime", "dashboard"):
+            cmd = commands[step_name]
+            completed = subprocess.run(
+                cmd,
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            log_chunks.append(f"$ {' '.join(cmd)}")
+            if completed.stdout.strip():
+                log_chunks.append(completed.stdout.strip())
+            if completed.stderr.strip():
+                log_chunks.append(completed.stderr.strip())
+            if completed.returncode != 0:
+                raise RuntimeError("\n\n".join(log_chunks))
+        return "\n\n".join(log_chunks)
+
+    def _format_metric(self, value: object, suffix: str) -> str:
+        if value is None:
+            return "n/a"
+        try:
+            return f"{float(value):.3f}{suffix}"
+        except Exception:
+            return f"{value}{suffix}"
 
     def _send_html(self, body: bytes, status: HTTPStatus = HTTPStatus.OK) -> None:
         self.send_response(status)
