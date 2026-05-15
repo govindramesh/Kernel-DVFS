@@ -27,20 +27,13 @@ def build_kernel_rows(profiles_payload: dict[str, Any]) -> str:
     profiles = profiles_payload["profiles"]
     ordered = sorted(
         profiles.values(),
-        key=lambda item: (
-            item.get("metadata", {}).get("phase", ""),
-            item.get("metadata", {}).get("family", ""),
-            item["kernel_name"],
-        ),
+        key=lambda item: item["kernel_name"],
     )
     for item in ordered:
-        metadata = item.get("metadata", {})
         rows.append(
             f"""
             <tr>
               <td>{item["kernel_name"]}</td>
-              <td>{metadata.get("phase", "n/a")}</td>
-              <td>{metadata.get("family", "n/a")}</td>
               <td>{format_number(item.get("baseline_ms"), digits=4, suffix=" ms")}</td>
               <td>{format_number(item.get("selected_runtime_ms"), digits=4, suffix=" ms")}</td>
               <td>{percent_delta(item.get("selected_runtime_ms"), item.get("baseline_ms"))}</td>
@@ -114,7 +107,6 @@ def build_event_rows(runtime_payload: dict[str, Any]) -> str:
             <tr>
               <td>{event["event_index"]}</td>
               <td>{event["kernel_name"]}</td>
-              <td>{event.get("phase", "n/a")}</td>
               <td>{layer_label}</td>
               <td>{format_number(event.get("auto_time_ms"), suffix=" ms")}</td>
               <td>{format_number(event.get("profiled_time_ms"), suffix=" ms")}</td>
@@ -250,8 +242,6 @@ def build_dashboard_html(profiles_payload: dict[str, Any], runtime_payload: dict
           <thead>
             <tr>
               <th>Kernel</th>
-              <th>Phase</th>
-              <th>Family</th>
               <th>Auto Runtime</th>
               <th>Ideal Runtime</th>
               <th>Runtime Delta</th>
@@ -306,7 +296,6 @@ def build_dashboard_html(profiles_payload: dict[str, Any], runtime_payload: dict
             <tr>
               <th>Event</th>
               <th>Kernel</th>
-              <th>Phase</th>
               <th>Layer</th>
               <th>Auto Time</th>
               <th>Profiled Time</th>

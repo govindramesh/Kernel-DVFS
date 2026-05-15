@@ -11,25 +11,21 @@ def load_kernel_specs_file(path: str) -> list[PaperKernelSpec]:
     payload = read_json(path)
     specs: list[PaperKernelSpec] = []
     for item in payload["kernels"]:
+        if "kernel_name" not in item or "source_code" not in item:
+            raise ValueError("Each custom kernel must include 'kernel_name' and 'source_code'")
         specs.append(
             PaperKernelSpec(
                 kernel_name=item["kernel_name"],
-                family=item["family"],
+                family=item.get("family", "custom"),
                 phase=item.get("phase", "custom"),
-                baseline_ms=float(item["baseline_ms"]),
-                optimal_core_mhz=int(item["optimal_core_mhz"]),
-                optimal_mem_mhz=int(item["optimal_mem_mhz"]),
-                static_power_watts=float(item["static_power_watts"]),
-                dynamic_power_watts=float(item["dynamic_power_watts"]),
+                baseline_ms=0.0,
+                optimal_core_mhz=0,
+                optimal_mem_mhz=0,
+                static_power_watts=0.0,
+                dynamic_power_watts=0.0,
                 repeat_count=int(item.get("repeat_count", 1)),
-                m=int(item.get("m", 0)),
-                n=int(item.get("n", 0)),
-                k=int(item.get("k", 0)),
-                rows=int(item.get("rows", 0)),
-                cols=int(item.get("cols", 0)),
-                elements=int(item.get("elements", 0)),
-                heads=int(item.get("heads", 0)),
                 description=item.get("description", item["kernel_name"]),
+                source_code=str(item["source_code"]),
             )
         )
     return specs

@@ -1,48 +1,16 @@
 {
-  "metadata": {
-    "name": "tiny_demo_kernels"
-  },
   "kernels": [
     {
       "kernel_name": "qkv_proj",
-      "family": "gemm",
-      "phase": "forward",
-      "baseline_ms": 0.74,
-      "optimal_core_mhz": 3090,
-      "optimal_mem_mhz": 7001,
-      "static_power_watts": 58.0,
-      "dynamic_power_watts": 96.0,
-      "m": 128,
-      "n": 1536,
-      "k": 512,
-      "description": "Toy attention projection GEMM"
+      "source_code": "def build_inputs(torch, device, dtype):\n    left = torch.randn((128, 512), device=device, dtype=dtype)\n    right = torch.randn((512, 1536), device=device, dtype=dtype)\n    return left, right\n\ndef run_kernel(torch, left, right):\n    return torch.matmul(left, right)\n"
     },
     {
       "kernel_name": "attn_softmax",
-      "family": "softmax",
-      "phase": "forward",
-      "baseline_ms": 0.15,
-      "optimal_core_mhz": 2400,
-      "optimal_mem_mhz": 14001,
-      "static_power_watts": 45.0,
-      "dynamic_power_watts": 20.0,
-      "rows": 1024,
-      "cols": 128,
-      "description": "Toy attention softmax"
+      "source_code": "def build_inputs(torch, device, dtype):\n    scores = torch.randn((1024, 128), device=device, dtype=dtype)\n    return (scores,)\n\ndef run_kernel(torch, scores):\n    return torch.softmax(scores, dim=-1)\n"
     },
     {
       "kernel_name": "mlp_project",
-      "family": "gemm",
-      "phase": "forward",
-      "baseline_ms": 0.83,
-      "optimal_core_mhz": 3090,
-      "optimal_mem_mhz": 7001,
-      "static_power_watts": 59.0,
-      "dynamic_power_watts": 98.0,
-      "m": 128,
-      "n": 512,
-      "k": 2048,
-      "description": "Toy MLP projection GEMM"
+      "source_code": "def build_inputs(torch, device, dtype):\n    left = torch.randn((128, 2048), device=device, dtype=dtype)\n    right = torch.randn((2048, 512), device=device, dtype=dtype)\n    return left, right\n\ndef run_kernel(torch, left, right):\n    return torch.matmul(left, right)\n"
     }
   ]
 }

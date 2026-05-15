@@ -24,8 +24,6 @@ def build_pipeline_commands(
     *,
     kernel_defs: str,
     workflow: str,
-    backend: str,
-    measurement_mode: str,
     profiles_output: str,
     runtime_output: str,
     dashboard_output: str,
@@ -38,9 +36,9 @@ def build_pipeline_commands(
         sys.executable,
         "profiler.py",
         "--backend",
-        backend,
+        "real",
         "--measurement-mode",
-        measurement_mode,
+        "real",
         "--kernel-defs",
         kernel_defs,
         "--tolerated-slowdown-pct",
@@ -96,11 +94,9 @@ def run_pipeline(**kwargs: Any) -> dict[str, str]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the custom KernelDVFS demo pipeline from kernel and workflow JSON files")
+    parser = argparse.ArgumentParser(description="Run the custom KernelDVFS pipeline from kernel and workflow JSON files")
     parser.add_argument("--kernel-defs", default=None)
     parser.add_argument("--workflow", default=None)
-    parser.add_argument("--backend", choices=["mock", "real", "auto"], default="mock")
-    parser.add_argument("--measurement-mode", choices=["mock", "real", "auto"], default="mock")
     parser.add_argument("--profiles-output", default="data/demo_profiles.json")
     parser.add_argument("--runtime-output", default="data/demo_runtime.json")
     parser.add_argument("--dashboard-output", default="data/demo_dashboard.html")
@@ -123,8 +119,6 @@ def main() -> None:
     outputs = run_pipeline(
         kernel_defs=kernel_defs,
         workflow=workflow,
-        backend=args.backend,
-        measurement_mode=args.measurement_mode,
         profiles_output=args.profiles_output,
         runtime_output=args.runtime_output,
         dashboard_output=args.dashboard_output,

@@ -23,6 +23,7 @@ class PaperKernelSpec:
     elements: int = 0
     heads: int = 0
     description: str = ""
+    source_code: str | None = None
 
 
 PAPER_CORE_CLOCKS = [630, 840, 1050, 1260, 1470, 1680]

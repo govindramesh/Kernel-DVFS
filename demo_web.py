@@ -159,28 +159,12 @@ def index_body() -> str:
     return f"""
     <section class="hero">
       <h1>KernelDVFS Workbench</h1>
-      <p>Upload or edit kernel definitions and workflow JSON, then run profiling, aggregation, and dashboard generation from one page.</p>
+      <p>Provide kernel code and workflow JSON, then run real profiling, workload aggregation, and dashboard generation from one page.</p>
     </section>
     <section class="panel">
       <h2>Run Pipeline</h2>
       <form id="pipeline-form" method="post" action="/run" enctype="multipart/form-data" class="stack">
         <div class="controls">
-          <div class="field">
-            <label for="backend">Backend</label>
-            <select id="backend" name="backend">
-              <option value="mock" selected>mock</option>
-              <option value="real">real</option>
-              <option value="auto">auto</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="measurement_mode">Measurement Mode</label>
-            <select id="measurement_mode" name="measurement_mode">
-              <option value="mock" selected>mock</option>
-              <option value="real">real</option>
-              <option value="auto">auto</option>
-            </select>
-          </div>
           <div class="field">
             <label for="num_layers">Optional Layer Override</label>
             <input id="num_layers" name="num_layers" type="number" min="1" step="1" placeholder="Leave blank to use workflow file">
@@ -214,7 +198,7 @@ def index_body() -> str:
           </div>
         </div>
 
-        <p class="hint">If you upload files, they override the text areas. Outputs are stored under <code>data/web_runs/...</code>.</p>
+        <p class="hint">Each kernel must include <code>kernel_name</code> and <code>source_code</code>. The page always runs the real profiling path and sends process logs to the terminal. If you upload files, they override the text areas. Outputs are stored under <code>data/web_runs/...</code>.</p>
         <button class="submit" type="submit">Run</button>
       </form>
       <div id="live-status" class="stack" style="margin-top:18px; display:none;">
@@ -345,8 +329,6 @@ class DemoHandler(BaseHTTPRequestHandler):
             runtime_output = str(run_dir / "runtime.json")
             dashboard_output = str(run_dir / "dashboard.html")
 
-            backend = self._field_value(form, "backend", "mock")
-            measurement_mode = self._field_value(form, "measurement_mode", "mock")
             num_layers_raw = self._field_value(form, "num_layers", "").strip()
             num_layers = int(num_layers_raw) if num_layers_raw else None
             tolerated_slowdown_pct = float(self._field_value(form, "tolerated_slowdown_pct", "0.0"))
@@ -354,8 +336,6 @@ class DemoHandler(BaseHTTPRequestHandler):
             commands = build_pipeline_commands(
                 kernel_defs=str(kernel_defs_path),
                 workflow=str(workflow_path),
-                backend=backend,
-                measurement_mode=measurement_mode,
                 profiles_output=profiles_output,
                 runtime_output=runtime_output,
                 dashboard_output=dashboard_output,
