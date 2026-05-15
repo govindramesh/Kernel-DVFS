@@ -219,22 +219,18 @@ def index_body() -> str:
       </form>
       <div id="live-status" class="stack" style="margin-top:18px; display:none;">
         <div class="result-card">
-          <strong>Status</strong><br>
+          <strong>Current Step</strong><br>
           <span id="status-text">Starting…</span>
         </div>
         <div class="result-card" id="inline-results" style="display:none;"></div>
-        <div class="result-card">
-          <strong>Logs</strong>
-          <pre id="live-logs">Waiting to start…</pre>
-        </div>
       </div>
     </section>
     <script>
       const form = document.getElementById('pipeline-form');
       const liveStatus = document.getElementById('live-status');
       const statusText = document.getElementById('status-text');
-      const liveLogs = document.getElementById('live-logs');
       const inlineResults = document.getElementById('inline-results');
+      let activeRun = false;
 
       function renderResults(payload) {{
         if (!payload || !payload.metrics) return;
@@ -259,14 +255,17 @@ def index_body() -> str:
           const response = await fetch(`/status?run_id=${{encodeURIComponent(runId)}}`, {{ cache: 'no-store' }});
           const payload = await response.json();
           statusText.textContent = payload.status_text;
-          liveLogs.textContent = payload.logs || 'No logs yet…';
           if (payload.status === 'completed') {{
             renderResults(payload);
+            activeRun = false;
+            form.querySelector('button[type="submit"]').disabled = false;
             break;
           }}
           if (payload.status === 'failed') {{
             inlineResults.style.display = 'block';
-            inlineResults.innerHTML = '<strong>Run failed</strong>';
+            inlineResults.innerHTML = `<strong>Run failed</strong><br>${{payload.error || 'See terminal output for details.'}}`;
+            activeRun = false;
+            form.querySelector('button[type="submit"]').disabled = false;
             break;
           }}
           await new Promise(resolve => setTimeout(resolve, 900));
@@ -275,92 +274,32 @@ def index_body() -> str:
 
       form.addEventListener('submit', async (event) => {{
         event.preventDefault();
+        if (activeRun) return;
+        activeRun = true;
         liveStatus.style.display = 'grid';
         inlineResults.style.display = 'none';
-        statusText.textContent = 'Submitting…';
-        liveLogs.textContent = 'Starting pipeline…';
+        statusText.textContent = 'Preparing run…';
+        form.querySelector('button[type="submit"]').disabled = true;
         const formData = new FormData(form);
         const response = await fetch('/run', {{ method: 'POST', body: formData }});
         const payload = await response.json();
         if (!response.ok) {{
+          activeRun = false;
+          form.querySelector('button[type="submit"]').disabled = false;
           statusText.textContent = 'Failed to start';
-          liveLogs.textContent = payload.error || 'Unknown error';
+          inlineResults.style.display = 'block';
+          inlineResults.innerHTML = `<strong>Failed to start</strong><br>${{payload.error || 'Unknown error'}}`;
           return;
         }}
-        statusText.textContent = 'Running…';
+        statusText.textContent = 'Queued…';
         await pollRun(payload.run_id);
       }});
     </script>
     """
 
 
-def result_body(
-    run_id: str,
-    dashboard_href: str,
-    profiles_href: str,
-    runtime_href: str,
-    metrics: dict[str, str],
-    logs: str,
-) -> str:
-    return f"""
-    <section class="hero">
-      <h1>Run Complete</h1>
-      <p>The profiling, aggregation, and dashboard generation steps finished for run <code>{html.escape(run_id)}</code>.</p>
-    </section>
-    <section class="panel">
-      <h2>Results</h2>
-      <div class="metrics">
-        <div class="metric"><span class="metric-label">Profiled Kernels</span><span class="metric-value">{metrics["profiled_kernels"]}</span></div>
-        <div class="metric"><span class="metric-label">Workflow Events</span><span class="metric-value">{metrics["workflow_events"]}</span></div>
-        <div class="metric"><span class="metric-label">Auto Time</span><span class="metric-value">{metrics["auto_time"]}</span></div>
-        <div class="metric"><span class="metric-label">Profiled Time</span><span class="metric-value">{metrics["profiled_time"]}</span></div>
-        <div class="metric"><span class="metric-label">Auto Energy</span><span class="metric-value">{metrics["auto_energy"]}</span></div>
-        <div class="metric"><span class="metric-label">Profiled Energy</span><span class="metric-value">{metrics["profiled_energy"]}</span></div>
-      </div>
-    </section>
-    <section class="panel">
-      <h2>Artifacts</h2>
-      <div class="stack">
-        <div class="result-card">
-          <strong>Dashboard</strong><br>
-          <a href="{dashboard_href}" target="_blank" rel="noopener">Open dashboard</a>
-        </div>
-        <div class="result-card">
-          <strong>Profiles JSON</strong><br>
-          <a href="{profiles_href}" target="_blank" rel="noopener">Open profiles</a>
-        </div>
-        <div class="result-card">
-          <strong>Runtime Compare JSON</strong><br>
-          <a href="{runtime_href}" target="_blank" rel="noopener">Open aggregated runtime results</a>
-        </div>
-        <div class="result-card">
-          <a href="/">Start another run</a>
-        </div>
-      </div>
-    </section>
-    <section class="panel">
-      <h2>Logs</h2>
-      <pre>{html.escape(logs)}</pre>
-    </section>
-    """
-
-
-def error_body(message: str, details: str) -> str:
-    return f"""
-    <section class="hero">
-      <h1>Pipeline Failed</h1>
-      <p>{html.escape(message)}</p>
-    </section>
-    <section class="panel">
-      <h2>Details</h2>
-      <pre>{html.escape(details)}</pre>
-      <p><a href="/">Back to workbench</a></p>
-    </section>
-    """
-
-
 class DemoHandler(BaseHTTPRequestHandler):
-    server_version = "KernelDVFSDemo/1.0"
+    server_version = "KernelDVFSWorkbench/1.0"
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -457,18 +396,14 @@ class DemoHandler(BaseHTTPRequestHandler):
             RUN_STATE[run_id] = {
                 "status": "running",
                 "status_text": "Queued",
-                "logs": "",
                 "run_dir": run_dir,
                 "commands": commands,
                 "metrics": None,
+                "error": None,
                 "dashboard_href": f"/artifacts/{run_id}/dashboard.html",
                 "profiles_href": f"/artifacts/{run_id}/profiles.json",
                 "runtime_href": f"/artifacts/{run_id}/runtime.json",
             }
-
-    def _append_log(self, run_id: str, text: str) -> None:
-        with RUN_STATE_LOCK:
-            RUN_STATE[run_id]["logs"] = str(RUN_STATE[run_id]["logs"]) + text
 
     def _set_status(self, run_id: str, status: str, status_text: str) -> None:
         with RUN_STATE_LOCK:
@@ -482,27 +417,21 @@ class DemoHandler(BaseHTTPRequestHandler):
                 commands = dict(state["commands"])
                 run_dir = Path(state["run_dir"])
             for step_name, status_text in (
-                ("profiler", "Running profiler…"),
-                ("runtime", "Aggregating workload…"),
-                ("dashboard", "Building dashboard…"),
+                ("profiler", "Step 1 of 3: profiling kernels"),
+                ("runtime", "Step 2 of 3: aggregating workload"),
+                ("dashboard", "Step 3 of 3: building dashboard"),
             ):
                 self._set_status(run_id, "running", status_text)
                 cmd = commands[step_name]
-                self._append_log(run_id, f"$ {' '.join(cmd)}\n")
-                process = subprocess.Popen(
+                print(f"$ {' '.join(cmd)}", flush=True)
+                completed = subprocess.run(
                     cmd,
                     cwd=ROOT,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
+                    check=False,
                 )
-                assert process.stdout is not None
-                for line in process.stdout:
-                    self._append_log(run_id, line)
-                returncode = process.wait()
-                self._append_log(run_id, "\n")
-                if returncode != 0:
+                if completed.returncode != 0:
+                    with RUN_STATE_LOCK:
+                        RUN_STATE[run_id]["error"] = f"{step_name} failed with exit code {completed.returncode}"
                     self._set_status(run_id, "failed", f"{step_name} failed")
                     return
 
@@ -520,19 +449,21 @@ class DemoHandler(BaseHTTPRequestHandler):
                 RUN_STATE[run_id]["metrics"] = metrics
             self._set_status(run_id, "completed", "Complete")
         except Exception as exc:
-            self._append_log(run_id, "\n" + "".join(traceback.format_exception(exc)))
+            with RUN_STATE_LOCK:
+                RUN_STATE[run_id]["error"] = str(exc)
+            print("".join(traceback.format_exception(exc)), flush=True)
             self._set_status(run_id, "failed", "Run failed")
 
     def _status_payload(self, run_id: str) -> dict[str, object]:
         with RUN_STATE_LOCK:
             state = RUN_STATE.get(run_id)
             if state is None:
-                return {"status": "missing", "status_text": "Run not found", "logs": ""}
+                return {"status": "missing", "status_text": "Run not found"}
             return {
                 "status": state["status"],
                 "status_text": state["status_text"],
-                "logs": state["logs"],
                 "metrics": state["metrics"],
+                "error": state["error"],
                 "dashboard_href": state["dashboard_href"],
                 "profiles_href": state["profiles_href"],
                 "runtime_href": state["runtime_href"],
@@ -575,7 +506,7 @@ class DemoHandler(BaseHTTPRequestHandler):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the KernelDVFS demo as a local webpage")
+    parser = argparse.ArgumentParser(description="Run KernelDVFS as a local webpage")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     return parser.parse_args()
@@ -585,7 +516,7 @@ def main() -> None:
     args = parse_args()
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer((args.host, args.port), DemoHandler)
-    print(f"KernelDVFS web demo running at http://{args.host}:{args.port}")
+    print(f"KernelDVFS workbench running at http://{args.host}:{args.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
