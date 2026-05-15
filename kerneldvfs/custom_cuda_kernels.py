@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import os
 from pathlib import Path
+import shutil
 from typing import Any, Callable
 
 
@@ -92,14 +94,48 @@ def custom_cuda_category(kernel_name: str) -> str:
     return get_custom_cuda_kernel(kernel_name).category
 
 
+def _detect_cuda_home() -> str | None:
+    env_value = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
+    if env_value:
+        return env_value
+
+    nvcc_path = shutil.which("nvcc")
+    if nvcc_path:
+        return str(Path(nvcc_path).resolve().parent.parent)
+
+    candidates = [
+        Path("/usr/local/cuda"),
+        Path("/usr/local/cuda-12.4"),
+        Path("/usr/local/cuda-12.3"),
+        Path("/usr/local/cuda-12.2"),
+        Path("/usr/local/cuda-12.1"),
+        Path("/usr/local/cuda-12.0"),
+        Path("/usr/local/cuda-11.8"),
+    ]
+    for candidate in candidates:
+        if (candidate / "bin" / "nvcc").exists():
+            return str(candidate)
+    return None
+
+
 @lru_cache(maxsize=1)
 def load_custom_cuda_extension(torch: Any) -> Any:
-    from torch.utils.cpp_extension import load
+    import torch.utils.cpp_extension as cpp_extension
+
+    cuda_home = _detect_cuda_home()
+    if cuda_home:
+        os.environ.setdefault("CUDA_HOME", cuda_home)
+        os.environ.setdefault("CUDA_PATH", cuda_home)
+        cpp_extension.CUDA_HOME = cuda_home
+    if not cpp_extension.CUDA_HOME:
+        raise RuntimeError(
+            "Unable to locate CUDA toolkit. Set CUDA_HOME to your CUDA install root, for example /usr/local/cuda."
+        )
 
     sources = [str(CUDA_DIR / filename) for filename in ("binding.cpp", "rmsnorm_kernel.cu", "silu_kernel.cu", "softmax_kernel.cu")]
     build_directory = ROOT / "data" / "torch_extensions" / "kerneldvfs_custom_cuda"
     build_directory.mkdir(parents=True, exist_ok=True)
-    return load(
+    return cpp_extension.load(
         name="kerneldvfs_custom_cuda",
         sources=sources,
         extra_cflags=["-O3"],

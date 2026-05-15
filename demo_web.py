@@ -138,6 +138,11 @@ def page_template(body: str) -> bytes:
       word-break: break-word;
       color: var(--ink);
     }}
+    .log-panel {{
+      max-height: 320px;
+      margin: 0;
+      font: 0.88rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }}
     @media (max-width: 900px) {{
       .grid {{ grid-template-columns: 1fr; }}
       .controls {{ grid-template-columns: 1fr; }}
@@ -206,6 +211,10 @@ def index_body() -> str:
           <strong>Current Step</strong><br>
           <span id="status-text">Starting…</span>
         </div>
+        <div class="result-card">
+          <strong>Terminal Output</strong>
+          <pre id="log-panel" class="log-panel">Waiting for output…</pre>
+        </div>
         <div class="result-card" id="inline-results" style="display:none;"></div>
       </div>
     </section>
@@ -213,8 +222,10 @@ def index_body() -> str:
       const form = document.getElementById('pipeline-form');
       const liveStatus = document.getElementById('live-status');
       const statusText = document.getElementById('status-text');
+      const logPanel = document.getElementById('log-panel');
       const inlineResults = document.getElementById('inline-results');
       let activeRun = false;
+      let logCursor = 0;
 
       function renderResults(payload) {{
         if (!payload || !payload.metrics) return;
@@ -236,9 +247,17 @@ def index_body() -> str:
 
       async function pollRun(runId) {{
         while (true) {{
-          const response = await fetch(`/status?run_id=${{encodeURIComponent(runId)}}`, {{ cache: 'no-store' }});
+          const response = await fetch(`/status?run_id=${{encodeURIComponent(runId)}}&cursor=${{encodeURIComponent(logCursor)}}`, {{ cache: 'no-store' }});
           const payload = await response.json();
           statusText.textContent = payload.status_text;
+          if (payload.logs && payload.logs.length) {{
+            if (logCursor === 0) {{
+              logPanel.textContent = '';
+            }}
+            logPanel.textContent += payload.logs.join('');
+            logPanel.scrollTop = logPanel.scrollHeight;
+            logCursor = payload.log_cursor || logCursor;
+          }}
           if (payload.status === 'completed') {{
             renderResults(payload);
             activeRun = false;
@@ -260,8 +279,10 @@ def index_body() -> str:
         event.preventDefault();
         if (activeRun) return;
         activeRun = true;
+        logCursor = 0;
         liveStatus.style.display = 'grid';
         inlineResults.style.display = 'none';
+        logPanel.textContent = 'Waiting for output…';
         statusText.textContent = 'Preparing run…';
         form.querySelector('button[type="submit"]').disabled = true;
         const formData = new FormData(form);
@@ -293,7 +314,8 @@ class DemoHandler(BaseHTTPRequestHandler):
         if parsed.path == "/status":
             query = parse_qs(parsed.query)
             run_id = query.get("run_id", [""])[0]
-            self._send_json(self._status_payload(run_id))
+            cursor = int(query.get("cursor", ["0"])[0] or "0")
+            self._send_json(self._status_payload(run_id, cursor))
             return
         if parsed.path.startswith("/artifacts/"):
             relative = parsed.path.removeprefix("/artifacts/")
@@ -378,6 +400,7 @@ class DemoHandler(BaseHTTPRequestHandler):
                 "status_text": "Queued",
                 "run_dir": run_dir,
                 "commands": commands,
+                "logs": [],
                 "metrics": None,
                 "error": None,
                 "dashboard_href": f"/artifacts/{run_id}/dashboard.html",
@@ -389,6 +412,12 @@ class DemoHandler(BaseHTTPRequestHandler):
         with RUN_STATE_LOCK:
             RUN_STATE[run_id]["status"] = status
             RUN_STATE[run_id]["status_text"] = status_text
+
+    def _append_log(self, run_id: str, line: str) -> None:
+        with RUN_STATE_LOCK:
+            logs = RUN_STATE[run_id]["logs"]
+            assert isinstance(logs, list)
+            logs.append(line)
 
     def _execute_run(self, run_id: str) -> None:
         try:
@@ -403,15 +432,25 @@ class DemoHandler(BaseHTTPRequestHandler):
             ):
                 self._set_status(run_id, "running", status_text)
                 cmd = commands[step_name]
-                print(f"$ {' '.join(cmd)}", flush=True)
-                completed = subprocess.run(
+                command_line = f"$ {' '.join(cmd)}\n"
+                print(command_line, end="", flush=True)
+                self._append_log(run_id, command_line)
+                process = subprocess.Popen(
                     cmd,
                     cwd=ROOT,
-                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
                 )
-                if completed.returncode != 0:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    print(line, end="", flush=True)
+                    self._append_log(run_id, line)
+                completed_returncode = process.wait()
+                if completed_returncode != 0:
                     with RUN_STATE_LOCK:
-                        RUN_STATE[run_id]["error"] = f"{step_name} failed with exit code {completed.returncode}"
+                        RUN_STATE[run_id]["error"] = f"{step_name} failed with exit code {completed_returncode}"
                     self._set_status(run_id, "failed", f"{step_name} failed")
                     return
 
@@ -434,14 +473,18 @@ class DemoHandler(BaseHTTPRequestHandler):
             print("".join(traceback.format_exception(exc)), flush=True)
             self._set_status(run_id, "failed", "Run failed")
 
-    def _status_payload(self, run_id: str) -> dict[str, object]:
+    def _status_payload(self, run_id: str, cursor: int = 0) -> dict[str, object]:
         with RUN_STATE_LOCK:
             state = RUN_STATE.get(run_id)
             if state is None:
                 return {"status": "missing", "status_text": "Run not found"}
+            logs = state["logs"]
+            assert isinstance(logs, list)
             return {
                 "status": state["status"],
                 "status_text": state["status_text"],
+                "logs": logs[cursor:],
+                "log_cursor": len(logs),
                 "metrics": state["metrics"],
                 "error": state["error"],
                 "dashboard_href": state["dashboard_href"],
