@@ -103,9 +103,21 @@ def paper_kernel_specs(num_layers: int = 12) -> list[PaperKernelSpec]:
 
 
 def expanded_trace_specs(num_layers: int = 12) -> list[PaperKernelSpec]:
+    specs = paper_kernel_specs(num_layers=num_layers)
+    repeated_start = next((index for index, spec in enumerate(specs) if spec.repeat_count == num_layers), len(specs))
+    repeated_end = repeated_start
+    while repeated_end < len(specs) and specs[repeated_end].repeat_count == num_layers:
+        repeated_end += 1
+
+    prefix = specs[:repeated_start]
+    repeated = specs[repeated_start:repeated_end]
+    suffix = specs[repeated_end:]
+
     expanded: list[PaperKernelSpec] = []
-    for spec in paper_kernel_specs(num_layers=num_layers):
-        expanded.extend([spec] * spec.repeat_count)
+    expanded.extend(prefix)
+    for _layer_index in range(num_layers):
+        expanded.extend(repeated)
+    expanded.extend(suffix)
     return expanded
 
 
