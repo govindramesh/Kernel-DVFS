@@ -31,10 +31,18 @@ htmlcov/
 
 # Local runtime outputs
 data/profiles.json
+data/runtime_comparison.json
+data/dashboard.html
+data/demo_profiles.json
+data/demo_runtime.json
+data/demo_dashboard.html
 data/superblock_schedule.json
 data/example_graph.json
 data/example_execution_trace.json
 data/example_superblock_schedule.json
+data/execution_trace.json
+data/web_runs/
+data/torch_extensions/
 
 # Logs
 *.log

@@ -1,203 +1,161 @@
-# KernelDVFS MVP
+# KernelDVFS
 
-KernelDVFS is a deterministic, hardware-aware DVFS prototype for LLM workloads. The paper-recreation path now follows the local kernel-level waste-reduction flow from the January 13, 2026 paper "Reducing Compute Waste in LLMs through Kernel-Level DVFS":
+KernelDVFS is a research-to-production prototype based on the paper *Reducing Compute Waste in LLMs through Kernel-Level DVFS*. The repo has two complementary paths:
 
-1. `example_graph.py --scenario paper_iteration` emits an `llm.c`-style GPT-2 forward-only inference trace with 16 distinct kernel types and 12 repeated transformer layers.
-2. `profiler.py` profiles each distinct kernel against an `auto` baseline and selects the lowest-energy clock within a tolerated slowdown percentage.
-3. `partitioner.py` and `daemon.py` remain available for later productionization work.
-4. `runtime_compare.py` aggregates isolated kernel measurements over the workload order to reproduce the paper-style `auto` vs profiled comparison.
+- a paper-recreation path for profiling and aggregating per-kernel DVFS decisions
+- a real CUDA demo path for running a small custom workflow through bundled CUDA kernels and visualizing the results
 
-The project is designed to run in two modes:
+## What’s in the repo
 
-- `mock`: Uses a deterministic synthetic hardware model and works on any machine.
-- `auto`: Tries to use real NVML-backed clock control if `pynvml` and a supported GPU are available, then falls back to mock mode.
+- `profiler.py`: profiles kernels against `auto` clocks and selects the lowest-energy clock within a slowdown bound
+- `runtime_compare.py`: aggregates isolated kernel measurements over a workflow, paper-style
+- `dashboard.py`: generates a standalone HTML dashboard
+- `demo_web.py`: local web workbench for running the custom workflow path
+- `demo_pipeline.py`: CLI wrapper for the same custom workflow path
+- `kerneldvfs/paper_recreation.py`: forward-only transformer-style kernel catalog used for the paper recreation flow
+- `kerneldvfs/custom_cuda_kernels.py`: registry and extension loader for the bundled CUDA demo kernels
+- `kerneldvfs/cuda_kernels/`: CUDA sources used by the custom demo path
 
-## Files
+## Repository Layout
 
-- `profiler.py`: Paper-style offline clock sweeper and profile generator.
-- `partitioner.py`: Greedy super-block partitioner and scheduler.
-- `daemon.py`: Concurrent runtime actuation simulator.
-- `example_graph.py`: Emits either the paper-style GPT iteration trace or the older synthetic block trace.
-- `kerneldvfs/kernels.py`: Actual Triton kernels and PyTorch launch wrappers for GEMM, RMSNorm, softmax, and SiLU gating.
-- `kerneldvfs/models.py`: Shared dataclasses and JSON serialization.
-- `kerneldvfs/nvml_controller.py`: Real and mock NVML control paths.
-- `kerneldvfs/paper_recreation.py`: Paper kernel catalog, paper clock domains, and benchmark families.
-- `runtime_compare.py`: Sequential workload runner for `auto` vs profiled-clock comparison, including measured clock transition latency.
-- `dashboard.py`: Standalone HTML dashboard generator for per-kernel profiling and runtime comparison outputs.
-- `demo_pipeline.py`: One-shot custom demo pipeline that profiles a kernel file, aggregates a workflow file, and generates the dashboard.
-- `demo_web.py`: Local webpage demo for uploading or editing kernel/workflow JSON and running the full pipeline.
-- `data/execution_trace.json`: Sample transformer-layer execution trace.
-
-## Quickstart
-
-```bash
-python3 example_graph.py --scenario paper_iteration --trace-output data/example_execution_trace.json
-python3 profiler.py --backend mock --measurement-mode mock --tolerated-slowdown-pct 0.0 --output data/profiles.json
-python3 partitioner.py --profiles data/profiles.json --trace data/example_execution_trace.json --output data/superblock_schedule.json
-python3 daemon.py --schedule data/superblock_schedule.json --backend mock
+```text
+.
+├── kerneldvfs/
+│   ├── cuda_kernels/          # Bundled CUDA kernels for the custom demo
+│   ├── custom_cuda_kernels.py # Kernel registry + torch extension loader
+│   ├── nvml_controller.py     # Real/mock clock control
+│   ├── paper_recreation.py    # Built-in paper-style workload definitions
+│   └── workload_loader.py     # Custom workflow and kernel-definition loading
+├── data/
+│   ├── demo_kernels.json      # Sample custom kernel list
+│   └── demo_workflow.json     # Sample workflow definition
+├── profiler.py
+├── runtime_compare.py
+├── dashboard.py
+├── demo_pipeline.py
+└── demo_web.py
 ```
 
-## Real Runtime Comparison
+## Installation
 
-Once you have a real profile file, you can aggregate the workload under `auto` and per-kernel profiled clocks:
-
-```bash
-python3 profiler.py --backend real --measurement-mode real --device-index 0 --tolerated-slowdown-pct 0.0 --output data/profiles.json
-python3 runtime_compare.py --profiles data/profiles.json --output data/runtime_comparison.json
-python3 dashboard.py --profiles data/profiles.json --runtime-compare data/runtime_comparison.json --output data/dashboard.html
-```
-
-`runtime_compare.py`:
-
-- expands the workload execution order
-- sums measured per-kernel `auto` runtime and energy over that order
-- sums measured per-kernel profiled runtime and energy over that order
-- reports per-layer and whole-workload totals without replaying live clock switches
-
-`dashboard.py`:
-
-- builds a standalone local HTML page
-- shows a top kernel table with auto vs ideal runtime and energy
-- shows the execution graph plus per-layer and whole-workload comparison from `runtime_compare.py`
-
-## Custom Demo
-
-The simplest end-to-end demo takes:
-
-- a kernel definition file such as `data/demo_kernels.json`
-- a workflow file such as `data/demo_workflow.json`
-
-Then runs:
+Install Python dependencies:
 
 ```bash
-python3 demo_pipeline.py
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-The script will prompt for the two files if you do not pass them explicitly. You can also run it non-interactively:
+For real GPU runs you also need:
+
+- an NVIDIA GPU with supported clock control
+- a working driver and `nvidia-smi`
+- the CUDA toolkit, including `nvcc`
+- `CUDA_HOME` set, or a standard CUDA install path such as `/usr/local/cuda`
+
+## Paper Recreation Flow
+
+The built-in paper path uses a forward-only transformer-style kernel inventory and supports both mock and real profiling.
+
+Generate profiles:
+
+```bash
+python3 profiler.py \
+  --backend real \
+  --measurement-mode real \
+  --device-index 0 \
+  --nvidia-smi-sudo \
+  --output data/profiles.json
+```
+
+Aggregate workload totals:
+
+```bash
+python3 runtime_compare.py \
+  --profiles data/profiles.json \
+  --output data/runtime_comparison.json
+```
+
+Build the dashboard:
+
+```bash
+python3 dashboard.py \
+  --profiles data/profiles.json \
+  --runtime-compare data/runtime_comparison.json \
+  --output data/dashboard.html
+```
+
+This comparison is intentionally **offline aggregation**, matching the paper’s main methodology:
+
+- each unique kernel is profiled in isolation
+- `runtime_compare.py` sums the isolated measurements over the workflow order
+- the repo does not replay live clock changes per kernel for the paper comparison
+
+## Custom CUDA Demo
+
+The custom demo path is **real-run only**. Instead of accepting arbitrary Python kernel bodies, it accepts a kernel list whose names map to bundled CUDA kernels in `kerneldvfs/cuda_kernels/`.
+
+Sample kernel list:
+
+```json
+{
+  "kernels": [
+    { "kernel_name": "rmsnorm" },
+    { "kernel_name": "softmax" },
+    { "kernel_name": "silu" }
+  ]
+}
+```
+
+Sample workflow:
+
+```json
+{
+  "prefix": [],
+  "layer_kernel_order": ["rmsnorm", "softmax", "silu"],
+  "num_layers": 4,
+  "suffix": []
+}
+```
+
+Run it from the CLI:
 
 ```bash
 python3 demo_pipeline.py \
   --kernel-defs data/demo_kernels.json \
-  --workflow data/demo_workflow.json \
-  --backend mock \
-  --measurement-mode mock \
-  --profiles-output data/demo_profiles.json \
-  --runtime-output data/demo_runtime.json \
-  --dashboard-output data/demo_dashboard.html
+  --workflow data/demo_workflow.json
 ```
 
-Workflow file shape:
-
-- `prefix`: kernels that run once before repeated layers
-- `layer_kernel_order`: kernels that run in-order inside each layer
-- `num_layers`: how many times to repeat that middle sequence
-- `suffix`: kernels that run once after the repeated layers
-
-## Web Demo
-
-To run the same custom demo flow as a webpage:
+Or launch the web workbench:
 
 ```bash
 python3 demo_web.py --host 127.0.0.1 --port 8000
 ```
 
-Then open:
+Then open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
-```text
-http://127.0.0.1:8000
-```
+The web workbench:
 
-The page lets you:
+- accepts a kernel list and workflow JSON
+- runs the real profiler path
+- streams subprocess output into the page
+- shows the current pipeline step
+- generates the dashboard and JSON artifacts
 
-- paste or upload a kernel definitions JSON file
-- paste or upload a workflow JSON file
-- choose mock vs real profiling
-- run profiling, aggregation, and dashboard generation in one click
-- open the generated dashboard and JSON artifacts in the browser
+## Bundled CUDA Kernels
 
-## Dependency Notes
+The custom demo currently ships with three small CUDA operators:
 
-Optional GPU-backed execution uses:
+- `rmsnorm`
+- `softmax`
+- `silu`
 
-- `nvidia-ml-py`
-- `torch`
-- `triton`
-- `kernel_tuner`
+These are compiled at runtime through `torch.utils.cpp_extension.load(...)`.
 
-The profiler ships with a mock paper-recreation workload model so the pipeline remains testable without those dependencies. If the real stack is present, the code will use genuine NVML clock queries and locking and benchmark representative CUDA kernels for each paper kernel family.
+The operator set and naming were inspired by [FlashInfer](https://github.com/flashinfer-ai/flashinfer), but the CUDA code in this repo is local and simplified for the demo path.
 
-## Kernel Implementations
+## Notes
 
-Actual Triton kernels now live in `kerneldvfs/kernels.py`:
-
-- `matmul_kernel`: Used for `fused_qkv_matmul`, `attention_scores_matmul`, `attention_value_matmul`, `mlp_up_proj_matmul`, and `mlp_down_proj_matmul`.
-- `rmsnorm_kernel`: Row-wise RMSNorm over the hidden dimension.
-- `softmax_kernel`: Row-wise masked-softmax core without the masking prepass.
-- `silu_gate_kernel`: Fused SiLU-and-gate elementwise kernel for the MLP path.
-
-PyTorch launch helpers are exposed as `launch_matmul`, `launch_rmsnorm`, `launch_softmax`, and `launch_silu_gate`. The `example_inputs()` helper builds representative LLM-shaped CUDA tensors for each kernel when `torch` and `triton` are available.
-
-## Runnable Example Graph
-
-`example_graph.py` executes this kernel sequence with artificial tensors:
-
-1. `fused_qkv_matmul`
-2. `rmsnorm`
-3. `attention_scores_matmul`
-4. `masked_softmax`
-5. `attention_value_matmul`
-6. `mlp_up_proj_matmul`
-7. `silu_gate`
-8. `mlp_down_proj_matmul`
-
-It writes:
-
-- `data/example_graph.json`: Node-level graph description with inputs, outputs, and shapes.
-- `data/example_execution_trace.json`: Measured durations in the exact format expected by `partitioner.py`.
-
-CPU-safe example:
-
-```bash
-python3 example_graph.py --backend torch --device cpu --dtype float32
-python3 partitioner.py --profiles data/profiles.json --trace data/example_execution_trace.json --output data/superblock_schedule.json
-python3 daemon.py --schedule data/superblock_schedule.json --backend mock
-```
-
-If you have CUDA plus Triton available, you can switch to:
-
-```bash
-python3 example_graph.py --backend triton --device cuda --dtype float16
-```
-
-## Real Profiling
-
-`profiler.py` now supports two profiling modes:
-
-- `--measurement-mode mock`: Uses the synthetic runtime and energy model.
-- `--measurement-mode real`: Locks each candidate clock pair, warms up the actual Triton kernels, measures them with CUDA events, and reads energy from NVML when available.
-
-Example GPU run:
-
-```bash
-python3 profiler.py --backend real --measurement-mode real --device-index 0 --output data/profiles.json
-```
-
-If the environment cannot satisfy real profiling requirements, `--measurement-mode auto` will fall back to mock profiling while keeping the output format unchanged.
-
-If NVML clock-lock APIs return `Not Supported`, the controller now falls back to `nvidia-smi`. To force that path to run through non-interactive `sudo`, set:
-
-```bash
-export KERNELDVFS_NVIDIA_SMI_SUDO=1
-```
-
-You can also point to a specific binary with:
-
-```bash
-export KERNELDVFS_NVIDIA_SMI=/usr/bin/nvidia-smi
-```
-
-You can also pass those directly as CLI flags instead:
-
-```bash
-python3 profiler.py --backend real --measurement-mode real --nvidia-smi-sudo --nvidia-smi-path /usr/bin/nvidia-smi --device-index 0 --output data/profiles.json
-```
+- Real clock changes may require `sudo nvidia-smi`, so the demo pipeline enables `--nvidia-smi-sudo` by default.
+- The web workbench stores generated outputs under `data/web_runs/`.
+- Large generated artifacts, runtime outputs, and local extension builds are gitignored.
