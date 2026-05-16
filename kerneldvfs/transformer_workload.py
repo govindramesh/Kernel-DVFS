@@ -5,7 +5,7 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class PaperKernelSpec:
+class KernelSpec:
     kernel_name: str
     family: str
     phase: str
@@ -26,8 +26,8 @@ class PaperKernelSpec:
     source_code: str | None = None
 
 
-PAPER_CORE_CLOCKS = [630, 840, 1050, 1260, 1470, 1680]
-PAPER_MEMORY_CLOCKS = [5001, 9251, 9501]
+REFERENCE_CORE_CLOCKS = [630, 840, 1050, 1260, 1470, 1680]
+REFERENCE_MEMORY_CLOCKS = [5001, 9251, 9501]
 
 
 def _spec(
@@ -49,8 +49,8 @@ def _spec(
     cols: int = 0,
     elements: int = 0,
     heads: int = 0,
-) -> PaperKernelSpec:
-    return PaperKernelSpec(
+) -> KernelSpec:
+    return KernelSpec(
         kernel_name=f"k{idx:02d}_{name}",
         family=family,
         phase=phase,
@@ -71,7 +71,7 @@ def _spec(
     )
 
 
-def paper_kernel_specs(num_layers: int = 12) -> list[PaperKernelSpec]:
+def transformer_kernel_specs(num_layers: int = 12) -> list[KernelSpec]:
     # Forward-only GPT-2 style kernel inventory aligned to the public llm.c gpt2_forward structure.
     # Representative dimensions are based on GPT-2-small style widths and head count while keeping
     # sequence length practical for repeated benchmarking.
@@ -103,8 +103,8 @@ def paper_kernel_specs(num_layers: int = 12) -> list[PaperKernelSpec]:
     ]
 
 
-def expanded_trace_specs(num_layers: int = 12) -> list[PaperKernelSpec]:
-    specs = paper_kernel_specs(num_layers=num_layers)
+def expanded_transformer_trace(num_layers: int = 12) -> list[KernelSpec]:
+    specs = transformer_kernel_specs(num_layers=num_layers)
     repeated_start = next((index for index, spec in enumerate(specs) if spec.repeat_count == num_layers), len(specs))
     repeated_end = repeated_start
     while repeated_end < len(specs) and specs[repeated_end].repeat_count == num_layers:
@@ -114,7 +114,7 @@ def expanded_trace_specs(num_layers: int = 12) -> list[PaperKernelSpec]:
     repeated = specs[repeated_start:repeated_end]
     suffix = specs[repeated_end:]
 
-    expanded: list[PaperKernelSpec] = []
+    expanded: list[KernelSpec] = []
     expanded.extend(prefix)
     for _layer_index in range(num_layers):
         expanded.extend(repeated)
@@ -128,7 +128,7 @@ def family_category(family: str) -> str:
     return "memory"
 
 
-def spec_shapes(spec: PaperKernelSpec) -> dict[str, int]:
+def spec_shapes(spec: KernelSpec) -> dict[str, int]:
     return {
         "m": spec.m,
         "n": spec.n,
@@ -141,7 +141,7 @@ def spec_shapes(spec: PaperKernelSpec) -> dict[str, int]:
     }
 
 
-def build_family_inputs(spec: PaperKernelSpec, torch: Any, device: str, dtype: Any) -> tuple[Any, ...]:
+def build_family_inputs(spec: KernelSpec, torch: Any, device: str, dtype: Any) -> tuple[Any, ...]:
     if spec.family == "gemm":
         return (
             torch.randn((spec.m, spec.k), device=device, dtype=dtype),
@@ -164,10 +164,10 @@ def build_family_inputs(spec: PaperKernelSpec, torch: Any, device: str, dtype: A
         )
     if spec.family == "bias_reduce":
         return (torch.randn((spec.rows, spec.cols), device=device, dtype=dtype),)
-    raise ValueError(f"Unsupported paper kernel family '{spec.family}'")
+    raise ValueError(f"Unsupported kernel family '{spec.family}'")
 
 
-def run_family_kernel(spec: PaperKernelSpec, torch: Any, args: tuple[Any, ...]) -> Any:
+def run_family_kernel(spec: KernelSpec, torch: Any, args: tuple[Any, ...]) -> Any:
     if spec.family == "gemm":
         left, right = args
         return torch.matmul(left, right)
@@ -192,4 +192,4 @@ def run_family_kernel(spec: PaperKernelSpec, torch: Any, args: tuple[Any, ...]) 
     if spec.family == "embedding_backward":
         (x,) = args
         return x.sum(dim=0)
-    raise ValueError(f"Unsupported paper kernel family '{spec.family}'")
+    raise ValueError(f"Unsupported kernel family '{spec.family}'")

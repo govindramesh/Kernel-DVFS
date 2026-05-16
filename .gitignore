@@ -33,9 +33,9 @@ htmlcov/
 data/profiles.json
 data/runtime_comparison.json
 data/dashboard.html
-data/demo_profiles.json
-data/demo_runtime.json
-data/demo_dashboard.html
+data/workbench_profiles.json
+data/workbench_runtime.json
+data/workbench_dashboard.html
 data/superblock_schedule.json
 data/example_graph.json
 data/example_execution_trace.json

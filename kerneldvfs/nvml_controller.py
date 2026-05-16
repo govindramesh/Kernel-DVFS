@@ -9,7 +9,7 @@ import time
 from typing import Iterable
 
 from .models import ClockSetting
-from .paper_recreation import PAPER_CORE_CLOCKS, PAPER_MEMORY_CLOCKS
+from .transformer_workload import REFERENCE_CORE_CLOCKS, REFERENCE_MEMORY_CLOCKS
 
 LOGGER = logging.getLogger(__name__)
 
@@ -80,8 +80,8 @@ class MockClockController(BaseClockController):
         return "mock"
 
     def get_supported_clock_pairs(self) -> list[ClockSetting]:
-        core_clocks = PAPER_CORE_CLOCKS
-        mem_clocks = PAPER_MEMORY_CLOCKS
+        core_clocks = REFERENCE_CORE_CLOCKS
+        mem_clocks = REFERENCE_MEMORY_CLOCKS
         return self._deduplicate(ClockSetting(core_mhz=core, mem_mhz=mem) for core in core_clocks for mem in mem_clocks)
 
     def set_locked_clocks(self, setting: ClockSetting) -> None:

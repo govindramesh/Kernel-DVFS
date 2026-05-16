@@ -227,7 +227,7 @@ def build_dashboard_html(profiles_payload: dict[str, Any], runtime_payload: dict
   <main class="shell">
     <section class="hero">
       <h1>KernelDVFS Dashboard</h1>
-      <p class="subtitle">This dashboard follows the paper-style comparison path: isolated kernel measurements are aggregated over the execution trace instead of replaying live clock changes per kernel.</p>
+      <p class="subtitle">This dashboard follows the workload-based comparison path: isolated kernel measurements are aggregated over the execution trace instead of replaying live clock changes per kernel.</p>
       <div class="source-strip">
         <div class="source-pill"><strong>Profiles</strong><br>{source_paths['profiles']}</div>
         <div class="source-pill"><strong>Runtime Compare</strong><br>{source_paths['runtime_compare']}</div>

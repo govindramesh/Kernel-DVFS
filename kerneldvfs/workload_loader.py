@@ -5,12 +5,12 @@ from typing import Any
 
 from .custom_cuda_kernels import custom_cuda_category, get_custom_cuda_kernel, has_custom_cuda_kernel
 from .models import read_json
-from .paper_recreation import PaperKernelSpec
+from .transformer_workload import KernelSpec
 
 
-def load_kernel_specs_file(path: str) -> list[PaperKernelSpec]:
+def load_kernel_specs_file(path: str) -> list[KernelSpec]:
     payload = read_json(path)
-    specs: list[PaperKernelSpec] = []
+    specs: list[KernelSpec] = []
     for item in payload["kernels"]:
         if "kernel_name" not in item:
             raise ValueError("Each custom kernel must include 'kernel_name'")
@@ -19,7 +19,7 @@ def load_kernel_specs_file(path: str) -> list[PaperKernelSpec]:
             raise ValueError(f"Unknown custom CUDA kernel '{kernel_name}'")
         kernel = get_custom_cuda_kernel(kernel_name)
         specs.append(
-            PaperKernelSpec(
+            KernelSpec(
                 kernel_name=kernel_name,
                 family=custom_cuda_category(kernel_name),
                 phase=item.get("phase", "custom"),
@@ -39,10 +39,10 @@ def load_workflow_file(path: str) -> dict[str, Any]:
     return read_json(path)
 
 
-def expanded_trace_from_workflow(specs: list[PaperKernelSpec], workflow: dict[str, Any]) -> list[PaperKernelSpec]:
+def expanded_trace_from_workflow(specs: list[KernelSpec], workflow: dict[str, Any]) -> list[KernelSpec]:
     spec_by_name = {spec.kernel_name: spec for spec in specs}
     num_layers = int(workflow.get("num_layers", 1))
-    trace: list[PaperKernelSpec] = []
+    trace: list[KernelSpec] = []
     for name in workflow.get("prefix", []):
         trace.append(replace(spec_by_name[name], repeat_count=1))
     layer_order = workflow.get("layer_kernel_order", [])

@@ -4,7 +4,7 @@ import argparse
 from typing import Any
 
 from kerneldvfs.models import ProfileResult, read_json, write_json
-from kerneldvfs.paper_recreation import PaperKernelSpec, expanded_trace_specs, paper_kernel_specs
+from kerneldvfs.transformer_workload import KernelSpec, expanded_transformer_trace
 from kerneldvfs.workload_loader import (
     execution_graph_from_workflow,
     expanded_trace_from_workflow,
@@ -18,7 +18,7 @@ def load_profiles(path: str) -> dict[str, ProfileResult]:
     return {name: ProfileResult.from_dict(item) for name, item in payload["profiles"].items()}
 
 
-def identify_trace_regions(specs: list[PaperKernelSpec], num_layers: int) -> tuple[list[PaperKernelSpec], list[PaperKernelSpec], list[PaperKernelSpec]]:
+def identify_trace_regions(specs: list[KernelSpec], num_layers: int) -> tuple[list[KernelSpec], list[KernelSpec], list[KernelSpec]]:
     repeated_start = next((index for index, spec in enumerate(specs) if spec.repeat_count == num_layers), len(specs))
     repeated_end = repeated_start
     while repeated_end < len(specs) and specs[repeated_end].repeat_count == num_layers:
@@ -27,13 +27,13 @@ def identify_trace_regions(specs: list[PaperKernelSpec], num_layers: int) -> tup
 
 
 def aggregate_events(
-    trace_specs: list[PaperKernelSpec],
+    trace_specs: list[KernelSpec],
     profiles: dict[str, ProfileResult],
     num_layers: int,
     iterations: int,
     execution_graph: dict[str, Any],
 ) -> dict[str, Any]:
-    unique_specs: list[PaperKernelSpec] = []
+    unique_specs: list[KernelSpec] = []
     prefix_names = set(execution_graph.get("prefix", []))
     repeated_order = list(execution_graph.get("layer_kernel_order", []))
     repeated_names = set(repeated_order)
@@ -149,7 +149,7 @@ def aggregate_events(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Aggregate isolated kernel measurements into a paper-style workload comparison")
+    parser = argparse.ArgumentParser(description="Aggregate isolated kernel measurements into a workload comparison")
     parser.add_argument("--profiles", default="data/profiles.json")
     parser.add_argument("--num-layers", type=int, default=12)
     parser.add_argument("--iterations", type=int, default=1)
@@ -169,7 +169,7 @@ def main() -> None:
         execution_graph = execution_graph_from_workflow(workflow)
         num_layers = int(execution_graph.get("num_layers", 1))
     else:
-        trace_specs = expanded_trace_specs(num_layers=args.num_layers)
+        trace_specs = expanded_transformer_trace(num_layers=args.num_layers)
         execution_graph = {
             "prefix": ["k00_tokpos_embedding_add"],
             "layer_kernel_order": [
@@ -204,7 +204,7 @@ def main() -> None:
         "iterations": args.iterations,
         "kernel_defs_path": args.kernel_defs,
         "workflow_path": args.workflow,
-        "comparison_style": "paper_offline_aggregation",
+        "comparison_style": "offline_aggregation",
     }
     write_json(args.output, payload)
 

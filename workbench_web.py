@@ -14,12 +14,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from demo_pipeline import ROOT, build_pipeline_commands
+from workbench_pipeline import ROOT, build_pipeline_commands
 
 
 RUNS_DIR = ROOT / "data" / "web_runs"
-DEFAULT_KERNELS = ROOT / "data" / "demo_kernels.json"
-DEFAULT_WORKFLOW = ROOT / "data" / "demo_workflow.json"
+DEFAULT_KERNELS = ROOT / "data" / "sample_kernels.json"
+DEFAULT_WORKFLOW = ROOT / "data" / "sample_workflow.json"
 RUN_STATE: dict[str, dict[str, object]] = {}
 RUN_STATE_LOCK = threading.Lock()
 
@@ -167,7 +167,7 @@ def index_body() -> str:
       <p>Provide a kernel list and workflow JSON, then run real profiling, workload aggregation, and dashboard generation from one page.</p>
     </section>
     <section class="panel">
-      <h2>Run Pipeline</h2>
+      <h2>Run Workflow</h2>
       <form id="pipeline-form" method="post" action="/run" enctype="multipart/form-data" class="stack">
         <div class="controls">
           <div class="field">
@@ -539,7 +539,7 @@ def main() -> None:
     args = parse_args()
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer((args.host, args.port), DemoHandler)
-    print(f"KernelDVFS workbench running at http://{args.host}:{args.port}")
+    print(f"KernelDVFS Workbench running at http://{args.host}:{args.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

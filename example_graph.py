@@ -7,7 +7,7 @@ import time
 from typing import Any, Callable
 
 from kerneldvfs.models import write_json
-from kerneldvfs.paper_recreation import expanded_trace_specs, paper_kernel_specs, spec_shapes
+from kerneldvfs.transformer_workload import expanded_transformer_trace, transformer_kernel_specs, spec_shapes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -287,8 +287,8 @@ def build_graph(config: GraphConfig, runtime: str) -> tuple[dict[str, Any], list
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Emit an execution trace for either the MVP block or the paper-style GPT iteration")
-    parser.add_argument("--scenario", choices=["paper_iteration", "synthetic_block"], default="paper_iteration")
+    parser = argparse.ArgumentParser(description="Emit an execution trace for either the synthetic block or the built-in transformer iteration")
+    parser.add_argument("--scenario", choices=["transformer_iteration", "paper_iteration", "synthetic_block"], default="transformer_iteration")
     parser.add_argument("--backend", choices=["auto", "torch", "triton"], default="auto")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="float32")
@@ -304,13 +304,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_paper_iteration(num_layers: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    unique_specs = paper_kernel_specs(num_layers=num_layers)
-    expanded_specs = expanded_trace_specs(num_layers=num_layers)
+def build_transformer_iteration(num_layers: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    unique_specs = transformer_kernel_specs(num_layers=num_layers)
+    expanded_specs = expanded_transformer_trace(num_layers=num_layers)
     graph = {
         "metadata": {
             "graph_name": "llmc_gpt2_forward_inference",
-            "scenario": "paper_iteration",
+            "scenario": "transformer_iteration",
             "num_unique_kernels": len(unique_specs),
             "num_layers": num_layers,
             "expanded_kernel_invocations": len(expanded_specs),
@@ -334,8 +334,8 @@ def build_paper_iteration(num_layers: int) -> tuple[dict[str, Any], list[dict[st
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s %(message)s")
-    if args.scenario == "paper_iteration":
-        graph, trace = build_paper_iteration(num_layers=args.num_layers)
+    if args.scenario in {"transformer_iteration", "paper_iteration"}:
+        graph, trace = build_transformer_iteration(num_layers=args.num_layers)
     else:
         config = GraphConfig(
             batch_size=args.batch_size,
@@ -357,7 +357,7 @@ def main() -> None:
                 **graph["metadata"],
                 "description": (
                     "llm.c-style GPT-2 forward-only inference trace with per-invocation kernels"
-                    if args.scenario == "paper_iteration"
+                    if args.scenario in {"transformer_iteration", "paper_iteration"}
                     else "Measured execution trace for the synthetic transformer block"
                 ),
             },

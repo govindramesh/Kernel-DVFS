@@ -9,11 +9,11 @@ from typing import Any, Callable
 from kerneldvfs.models import ClockSetting, ProfileResult, write_json
 from kerneldvfs.nvml_controller import BaseClockController, create_clock_controller
 from kerneldvfs.custom_cuda_kernels import custom_cuda_category, get_custom_cuda_kernel, has_custom_cuda_kernel, load_custom_cuda_extension
-from kerneldvfs.paper_recreation import (
-    PaperKernelSpec,
+from kerneldvfs.transformer_workload import (
+    KernelSpec,
     build_family_inputs,
     family_category,
-    paper_kernel_specs,
+    transformer_kernel_specs,
     run_family_kernel,
     spec_shapes,
 )
@@ -75,7 +75,7 @@ class RealMeasurementContext:
     energy_source: str
 
 
-def workloads_from_specs(specs: list[PaperKernelSpec]) -> list[KernelWorkload]:
+def workloads_from_specs(specs: list[KernelSpec]) -> list[KernelWorkload]:
     return [
         KernelWorkload(
             kernel_name=spec.kernel_name,
@@ -90,8 +90,8 @@ def workloads_from_specs(specs: list[PaperKernelSpec]) -> list[KernelWorkload]:
     ]
 
 
-def default_workloads(num_layers: int) -> list[KernelWorkload]:
-    return workloads_from_specs(paper_kernel_specs(num_layers=num_layers))
+def transformer_workloads(num_layers: int) -> list[KernelWorkload]:
+    return workloads_from_specs(transformer_kernel_specs(num_layers=num_layers))
 
 
 class BenchmarkHarness:
@@ -100,7 +100,7 @@ class BenchmarkHarness:
         controller: BaseClockController,
         tolerated_slowdown_pct: float,
         measurement: MeasurementConfig,
-        specs: list[PaperKernelSpec],
+        specs: list[KernelSpec],
     ) -> None:
         self.controller = controller
         self.tolerated_slowdown_pct = tolerated_slowdown_pct
@@ -162,7 +162,7 @@ class BenchmarkHarness:
 
     def _prepare_real_kernel(
         self,
-        spec: PaperKernelSpec,
+        spec: KernelSpec,
         *,
         torch_module: Any,
         device: str,
@@ -176,7 +176,7 @@ class BenchmarkHarness:
 
         inputs = build_family_inputs(spec, torch=torch_module, device=device, dtype=dtype)
 
-        def family_runner(runtime_torch: Any, args: tuple[Any, ...], kernel_spec: PaperKernelSpec = spec) -> Any:
+        def family_runner(runtime_torch: Any, args: tuple[Any, ...], kernel_spec: KernelSpec = spec) -> Any:
             return run_family_kernel(kernel_spec, torch=runtime_torch, args=args)
 
         return inputs, family_runner
@@ -481,7 +481,7 @@ def main() -> None:
             allowed_core_clocks_mhz=tuple(args.core_clocks) if args.core_clocks else None,
             allowed_mem_clocks_mhz=tuple(args.mem_clocks) if args.mem_clocks else None,
         )
-        specs = load_kernel_specs_file(args.kernel_defs) if args.kernel_defs else paper_kernel_specs(num_layers=args.num_layers)
+        specs = load_kernel_specs_file(args.kernel_defs) if args.kernel_defs else transformer_kernel_specs(num_layers=args.num_layers)
         if args.kernel_defs:
             if args.backend != "real" or args.measurement_mode != "real":
                 raise RuntimeError("Custom kernel definitions are supported only with --backend real --measurement-mode real")

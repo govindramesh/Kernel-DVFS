@@ -94,12 +94,12 @@ def run_pipeline(**kwargs: Any) -> dict[str, str]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the custom KernelDVFS pipeline from kernel and workflow JSON files")
+    parser = argparse.ArgumentParser(description="Run the KernelDVFS Workbench pipeline from kernel and workflow JSON files")
     parser.add_argument("--kernel-defs", default=None)
     parser.add_argument("--workflow", default=None)
-    parser.add_argument("--profiles-output", default="data/demo_profiles.json")
-    parser.add_argument("--runtime-output", default="data/demo_runtime.json")
-    parser.add_argument("--dashboard-output", default="data/demo_dashboard.html")
+    parser.add_argument("--profiles-output", default="data/workbench_profiles.json")
+    parser.add_argument("--runtime-output", default="data/workbench_runtime.json")
+    parser.add_argument("--dashboard-output", default="data/workbench_dashboard.html")
     parser.add_argument("--num-layers", type=int, default=None, help="Override workflow num_layers if desired")
     parser.add_argument("--device-index", type=int, default=0)
     parser.add_argument("--nvidia-smi-sudo", action="store_true", default=True)
@@ -110,8 +110,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    default_kernel_defs = str(ROOT / "data" / "demo_kernels.json")
-    default_workflow = str(ROOT / "data" / "demo_workflow.json")
+    default_kernel_defs = str(ROOT / "data" / "sample_kernels.json")
+    default_workflow = str(ROOT / "data" / "sample_workflow.json")
 
     kernel_defs = args.kernel_defs or ask_for_path("Kernel definitions file", default_kernel_defs)
     workflow = args.workflow or ask_for_path("Workflow file", default_workflow)
